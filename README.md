@@ -1,13 +1,14 @@
 # Muratura FEM - Sistema di Calcolo Strutturale
 
-![Version](https://img.shields.io/badge/version-6.2-blue.svg)
+![Version](https://img.shields.io/badge/version-6.4.3-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Phase1](https://img.shields.io/badge/Fase%201-Completata-success.svg)
+![Phase2](https://img.shields.io/badge/Fase%202-Completata-success.svg)
 
 Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura conforme alle **Norme Tecniche per le Costruzioni NTC 2018** e **Eurocodice 8**.
 
-🎉 **NOVITÀ v6.2**: Feature parity BASE raggiunta con software commerciali italiani (3Muri, Aedes, CDSWin)
+🎉 **NOVITÀ v6.4.3**: Moduli edifici storici COMPLETATI - Archi, Volte, Rinforzi FRP/FRCM, Knowledge Levels!
 
 ## 🎯 Caratteristiche Principali
 
@@ -23,11 +24,19 @@ Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura
 - ✅ **Balconi**: C.a. a sbalzo, acciaio (HEA/IPE/UPN) - ⚠️ Verifica CRITICA ancoraggio muratura
 - ✅ **Scale**: Soletta rampante, sbalzo, ginocchio - Validazione geometrica DM 236/89
 
+### 🏛️ Edifici Storici in Muratura (Fase 2 - v6.4.3) ✅ COMPLETATA!
+- ✅ **Archi**: Analisi limite metodo Heyman - Thrust line, safety factor geometrico, 6 tipologie
+- ✅ **Volte**: Barrel, cross, dome, cloister, sail - Heyman esteso a 3D
+- ✅ **Rinforzi FRP/FRCM**: CFRP, GFRP, AFRP, C-FRCM - CNR-DT 200/215 compliant
+- ✅ **Knowledge Levels**: LC1/LC2/LC3 con fattori confidenza FC secondo NTC 2018 §8.5.4
+
 ### Conformità Normativa
-- ✅ **NTC 2018** completa + Circolare 2019
+- ✅ **NTC 2018** completa + Circolare 2019 (incl. Cap. 8 Edifici Esistenti)
 - ✅ **Eurocodice 8** (EC8)
 - ✅ **DM 236/89** (geometria scale)
-- ✅ **CNR-DT 200/215** (rinforzi FRP/FRCM - in sviluppo Fase 2)
+- ✅ **CNR-DT 200 R1/2013** (rinforzi FRP) ✅
+- ✅ **CNR-DT 215/2018** (rinforzi FRCM) ✅
+- ✅ **Linee Guida Beni Culturali 2011**
 
 ## 📋 Requisiti
 
