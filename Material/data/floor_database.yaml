@@ -1,0 +1,393 @@
+# Database Tipologie Solai - Materiali Commerciali
+# Aggiornato: 2025-11-14
+# Fonte: Schede tecniche produttori italiani
+
+# ============================================================================
+# PIGNATTE (Blocchi per Solai in Latero-Cemento)
+# ============================================================================
+
+floor_blocks:
+  # Wienerberger Porotherm
+  porotherm:
+    manufacturer: "Wienerberger"
+    series: "Porotherm"
+    types:
+      - name: "Porotherm 20/12.5"
+        height: 0.20  # m
+        width: 0.38  # m (per interasse 50cm)
+        weight: 13.5  # kg/m²
+        description: "Solaio interpiano standard h=20+4"
+
+      - name: "Porotherm 24/12.5"
+        height: 0.24
+        width: 0.38
+        weight: 15.0  # kg/m²
+        description: "Solaio interpiano maggiorato h=24+4"
+
+      - name: "Porotherm 16/12.5"
+        height: 0.16
+        width: 0.38
+        weight: 12.0  # kg/m²
+        description: "Solaio sottotetto/copertura h=16+4"
+
+  # Alveolater (Gruppo Pica)
+  alveolater:
+    manufacturer: "Gruppo Pica"
+    series: "Alveolater"
+    types:
+      - name: "Alveolater 20"
+        height: 0.20
+        width: 0.38
+        weight: 12.8  # kg/m²
+        description: "Blocco alleggerito h=20+4"
+        thermal_resistance: 0.38  # m²K/W
+
+      - name: "Alveolater 24"
+        height: 0.24
+        width: 0.38
+        weight: 14.5  # kg/m²
+        description: "Blocco alleggerito h=24+4"
+        thermal_resistance: 0.45  # m²K/W
+
+  # T2D (Consorzio Alveolater)
+  t2d:
+    manufacturer: "T2D"
+    series: "T2D Evo"
+    types:
+      - name: "T2D 20/50"
+        height: 0.20
+        width: 0.38
+        weight: 11.5  # kg/m² (ultraleggero)
+        description: "Blocco ad alta prestazione termica"
+        thermal_resistance: 0.42  # m²K/W
+        fire_resistance: "REI 120"
+
+      - name: "T2D 24/50"
+        height: 0.24
+        width: 0.38
+        weight: 13.0  # kg/m²
+        description: "Blocco maggiorato alta prestazione"
+        thermal_resistance: 0.50  # m²K/W
+        fire_resistance: "REI 150"
+
+  # Danesi (Gruppo Wienerberger)
+  danesi:
+    manufacturer: "Danesi"
+    series: "Solaio Leggero"
+    types:
+      - name: "Danesi SL20"
+        height: 0.20
+        width: 0.38
+        weight: 13.0  # kg/m²
+        description: "Solaio leggero standard"
+
+      - name: "Danesi SL24"
+        height: 0.24
+        width: 0.38
+        weight: 14.8  # kg/m²
+        description: "Solaio leggero maggiorato"
+
+# ============================================================================
+# TRAVETTI PREFABBRICATI
+# ============================================================================
+
+precast_beams:
+  # Travetti tralicciati standard
+  truss_beams:
+    manufacturer: "Standard"
+    types:
+      - name: "Tralicciato h16"
+        height: 0.16
+        width: 0.12
+        weight_per_m: 6.5  # kg/m
+        concrete_class: "C32/40"
+        steel_class: "B450C"
+        max_span: 5.5  # m
+
+      - name: "Tralicciato h20"
+        height: 0.20
+        width: 0.12
+        weight_per_m: 8.0  # kg/m
+        concrete_class: "C32/40"
+        steel_class: "B450C"
+        max_span: 6.5  # m
+
+      - name: "Tralicciato h24"
+        height: 0.24
+        width: 0.12
+        weight_per_m: 9.5  # kg/m
+        concrete_class: "C32/40"
+        steel_class: "B450C"
+        max_span: 7.5  # m
+
+  # Travetti precompressi
+  prestressed_beams:
+    manufacturer: "Standard"
+    types:
+      - name: "Precompresso 16x12"
+        height: 0.16
+        width: 0.12
+        weight_per_m: 28.0  # kg/m
+        concrete_class: "C45/55"
+        prestressing: "fili φ5"
+        max_span: 7.0  # m
+
+      - name: "Precompresso 20x12"
+        height: 0.20
+        width: 0.12
+        weight_per_m: 35.0  # kg/m
+        concrete_class: "C45/55"
+        prestressing: "fili φ5"
+        max_span: 8.5  # m
+
+# ============================================================================
+# SOLAI PREFABBRICATI (Predalles)
+# ============================================================================
+
+precast_slabs:
+  # Pannelli alveolari
+  hollow_core:
+    manufacturer: "Standard"
+    types:
+      - name: "Pannello Alveolare h20"
+        height: 0.20
+        width: 1.20  # m (larghezza standard pannello)
+        weight: 2.80  # kN/m²
+        concrete_class: "C45/55"
+        max_span: 8.0  # m
+        fire_resistance: "REI 120"
+
+      - name: "Pannello Alveolare h26"
+        height: 0.26
+        width: 1.20
+        weight: 3.50  # kN/m²
+        concrete_class: "C45/55"
+        max_span: 10.0  # m
+        fire_resistance: "REI 150"
+
+      - name: "Pannello Alveolare h32"
+        height: 0.32
+        width: 1.20
+        weight: 4.20  # kN/m²
+        concrete_class: "C45/55"
+        max_span: 12.0  # m
+        fire_resistance: "REI 180"
+
+# ============================================================================
+# SOLAI MISTI (Acciaio + Calcestruzzo)
+# ============================================================================
+
+composite_floors:
+  # Lamiera grecata + soletta
+  profiled_sheeting:
+    manufacturer: "Standard"
+    types:
+      - name: "Lamiera H55 + Soletta 5cm"
+        sheeting_height: 0.055  # m
+        slab_thickness: 0.05  # m
+        total_thickness: 0.105  # m
+        weight: 1.80  # kN/m² (lamiera + cls)
+        max_span: 3.0  # m (luce lamiera)
+
+      - name: "Lamiera H75 + Soletta 5cm"
+        sheeting_height: 0.075
+        slab_thickness: 0.05
+        total_thickness: 0.125
+        weight: 2.10  # kN/m²
+        max_span: 4.0  # m
+
+  # Travi in acciaio + soletta
+  steel_beams:
+    manufacturer: "Standard"
+    types:
+      - name: "IPE140 + Soletta 5cm"
+        beam_type: "IPE 140"
+        beam_height: 0.140
+        slab_thickness: 0.05
+        total_thickness: 0.190
+        beam_weight: 0.129  # kN/m
+        max_span: 5.0  # m
+
+      - name: "IPE180 + Soletta 5cm"
+        beam_type: "IPE 180"
+        beam_height: 0.180
+        slab_thickness: 0.05
+        total_thickness: 0.230
+        beam_weight: 0.188  # kN/m
+        max_span: 6.5  # m
+
+      - name: "HEA160 + Soletta 5cm"
+        beam_type: "HEA 160"
+        beam_height: 0.152
+        slab_thickness: 0.05
+        total_thickness: 0.202
+        beam_weight: 0.302  # kN/m
+        max_span: 6.0  # m
+
+# ============================================================================
+# SOLAI IN LEGNO
+# ============================================================================
+
+wood_floors:
+  # Travi in legno lamellare + tavolato
+  glulam:
+    manufacturer: "Standard"
+    types:
+      - name: "Trave GL24h 10x20 + Tavolato 3cm"
+        beam_width: 0.10
+        beam_height: 0.20
+        board_thickness: 0.03
+        total_thickness: 0.23
+        wood_class: "GL24h"
+        max_span: 4.5  # m
+        beam_spacing: 0.60  # m
+
+      - name: "Trave GL24h 12x24 + Tavolato 3cm"
+        beam_width: 0.12
+        beam_height: 0.24
+        board_thickness: 0.03
+        total_thickness: 0.27
+        wood_class: "GL24h"
+        max_span: 5.5  # m
+        beam_spacing: 0.60  # m
+
+  # Solaio X-LAM (legno a strati incrociati)
+  xlam:
+    manufacturer: "Standard"
+    types:
+      - name: "X-LAM 5 strati 10cm"
+        thickness: 0.10
+        layers: 5
+        weight: 0.50  # kN/m²
+        wood_class: "C24"
+        max_span: 5.0  # m
+
+      - name: "X-LAM 5 strati 14cm"
+        thickness: 0.14
+        layers: 5
+        weight: 0.70  # kN/m²
+        wood_class: "C24"
+        max_span: 6.5  # m
+
+# ============================================================================
+# TABELLE DI SELEZIONE
+# ============================================================================
+
+# Selezione solaio in base a luce e destinazione d'uso
+selection_guide:
+  residential:
+    "L < 4.5m":
+      recommended: "Latero-cemento h=20+4 (Porotherm 20, Alveolater 20)"
+      alternative: "Legno GL24h 10x20"
+
+    "4.5m ≤ L < 6.0m":
+      recommended: "Latero-cemento h=24+4 (Porotherm 24, T2D 24)"
+      alternative: "Prefabbricato alveolare h20"
+
+    "6.0m ≤ L < 8.0m":
+      recommended: "Prefabbricato alveolare h26"
+      alternative: "IPE180 + Soletta 5cm"
+
+    "L ≥ 8.0m":
+      recommended: "Prefabbricato alveolare h32 o h40"
+      alternative: "Travi metalliche HEA + Soletta"
+
+  office:
+    "L < 5.0m":
+      recommended: "Latero-cemento h=24+4"
+
+    "5.0m ≤ L < 7.0m":
+      recommended: "Prefabbricato alveolare h20"
+
+    "L ≥ 7.0m":
+      recommended: "Prefabbricato alveolare h26-h32"
+
+  historic:
+    "L < 4.0m":
+      recommended: "Legno tradizionale travi + assito"
+      note: "Rispettare caratteristiche originali"
+
+    "4.0m ≤ L < 5.5m":
+      recommended: "Legno lamellare GL24h + tavolato"
+      note: "Compatibile con vincoli storici"
+
+# ============================================================================
+# PESI PROPRI MEDI (kN/m²)
+# ============================================================================
+
+typical_weights:
+  latero_cemento:
+    "h=20+4": 3.0
+    "h=22+4": 3.3
+    "h=24+4": 3.6
+    "h=26+4": 3.9
+
+  prefabbricato_alveolare:
+    "h=20": 2.8
+    "h=26": 3.5
+    "h=32": 4.2
+    "h=40": 5.0
+
+  acciaio_soletta:
+    "IPE + soletta 5cm": 2.5
+    "HEA + soletta 5cm": 2.8
+    "Lamiera H55 + soletta 5cm": 1.8
+
+  legno:
+    "Travi + assito": 1.5
+    "GL24h + tavolato": 1.8
+    "X-LAM": 0.5  # per cm di spessore
+
+# ============================================================================
+# COSTI INDICATIVI (€/m² - 2025)
+# ============================================================================
+
+typical_costs:
+  latero_cemento:
+    material: 35  # €/m²
+    labor: 25  # €/m²
+    total: 60  # €/m²
+
+  prefabbricato_alveolare:
+    material: 55  # €/m²
+    labor: 20  # €/m² (posa più veloce)
+    total: 75  # €/m²
+
+  acciaio_soletta:
+    material: 70  # €/m²
+    labor: 30  # €/m²
+    total: 100  # €/m²
+
+  legno_xlam:
+    material: 90  # €/m²
+    labor: 25  # €/m²
+    total: 115  # €/m²
+
+# ============================================================================
+# NOTE TECNICHE
+# ============================================================================
+
+technical_notes:
+  latero_cemento: |
+    - Interasse nervature: 50cm (standard), 52cm (alcuni produttori)
+    - Larghezza nervatura: 10-12cm
+    - Copriferro: min 2cm (soletta), min 2.5cm (nervature)
+    - Maturazione: 28 giorni prima carico completo
+    - Puntellazione: necessaria fino a resistenza 10 MPa
+
+  prefabbricato: |
+    - Gru necessaria per montaggio
+    - Appoggio minimo: 10cm su muratura
+    - Collegamento testata: cordolo perimetrale
+    - Soletta integrativa: 4-5cm (opzionale per carichi pesanti)
+
+  acciaio: |
+    - Connettori a taglio: pioli φ19 H=10cm (spaziatura 15-20cm)
+    - Protezione fuoco: intonaco intumescente o cartongesso REI
+    - Manutenzione: verifica corrosione ogni 10 anni
+
+  legno: |
+    - Umidità legno: max 15% al momento posa
+    - Connessioni: viti autoforanti, cambrette metalliche
+    - Protezione fuoco: cartongesso REI 60-90-120
+    - Trattamento: impregnante antitarlo/antimuffa
