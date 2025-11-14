@@ -1,0 +1,421 @@
+\documentclass[{{ settings.font_size }}pt,{{ settings.page_size|lower }}paper]{article}
+
+% ============================================================================
+% Template: NTC 2018 Historic Buildings
+% Relazione di Calcolo Strutturale - Edifici Storici
+% Conforme a NTC 2018 Cap. 8 + Linee Guida Beni Culturali 2011
+% ============================================================================
+
+% Encoding e lingua
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+
+% Grafica e tabelle
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{multirow}
+
+% Layout pagina
+\usepackage{geometry}
+\geometry{
+    {{ settings.page_size|lower }}paper,
+    top=2.5cm,
+    bottom=2.5cm,
+    left=3cm,
+    right=2cm
+}
+
+% Header e footer
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Edificio Storico - {{ metadata.project_location }}}
+\fancyhead[R]{\small \thepage}
+\fancyfoot[C]{\small {{ metadata.designer_name }} - Rev. {{ metadata.revision }}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% Hyperlinks
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    pdftitle={{ metadata.project_name }} - Edificio Storico,
+    pdfauthor={{ metadata.designer_name }},
+}
+
+% Matematica
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Colori
+\usepackage{xcolor}
+\definecolor{heritage}{RGB}{139,69,19}
+\definecolor{historic}{RGB}{160,82,45}
+
+% ============================================================================
+% Documento
+% ============================================================================
+
+\begin{document}
+
+% Frontespizio personalizzato per edifici storici
+\begin{titlepage}
+\centering
+
+\vspace*{2cm}
+
+{\Huge \textbf{ {{ metadata.project_name }} }}\\
+
+\vspace{1cm}
+
+{\Large Relazione di Calcolo Strutturale}\\
+{\large Edificio Storico Vincolato}\\
+
+\vspace{0.5cm}
+
+{\normalsize Conforme a:}\\
+{\small NTC 2018 - Capitolo 8: Costruzioni Esistenti}\\
+{\small Linee Guida per la valutazione del rischio sismico\\del patrimonio culturale (2011)}\\
+
+\vfill
+
+\begin{tabular}{rl}
+\textbf{Località:} & {{ metadata.project_location }} \\
+{% if metadata.project_address %}
+\textbf{Indirizzo:} & {{ metadata.project_address }} \\
+{% endif %}
+\textbf{Committente:} & {{ metadata.client_name }} \\
+\textbf{Progettista:} & {{ metadata.designer_name }} \\
+ & {{ metadata.designer_order }} \\
+\textbf{Data:} & {{ metadata.report_date }} \\
+\textbf{Revisione:} & {{ metadata.revision }} \\
+\end{tabular}
+
+\vfill
+
+{\footnotesize \textit{Documento riservato - Uso interno}}
+
+\end{titlepage}
+
+% Indice
+{% if settings.include_toc %}
+\tableofcontents
+\clearpage
+{% endif %}
+
+% ============================================================================
+% 1. PREMESSA E INQUADRAMENTO
+% ============================================================================
+
+\section{Premessa e Inquadramento}
+
+\subsection{Premessa}
+
+{{ introduction }}
+
+\subsection{Vincoli e Tutela}
+
+L'edificio oggetto di intervento è sottoposto a vincolo di tutela ai sensi del D.Lgs. 42/2004 (Codice dei Beni Culturali e del Paesaggio).
+
+Gli interventi proposti sono stati concordati con la Soprintendenza competente e rispettano i criteri di:
+\begin{itemize}
+    \item Minimo intervento
+    \item Compatibilità con le caratteristiche storiche e architettoniche
+    \item Reversibilità degli interventi
+    \item Utilizzo di materiali e tecniche tradizionali ove possibile
+\end{itemize}
+
+% ============================================================================
+% 2. DESCRIZIONE EDIFICIO STORICO
+% ============================================================================
+
+\section{Descrizione dell'Edificio Storico}
+
+\subsection{Caratteristiche Generali}
+
+{{ building_description.text }}
+
+\subsection{Inquadramento Storico}
+
+{% if building_description.construction_period != 'N/D' %}
+\textbf{Epoca di costruzione}: {{ building_description.construction_period }}
+
+L'edificio rappresenta un esempio significativo dell'architettura del periodo, con caratteristiche costruttive tipiche dell'epoca.
+{% endif %}
+
+\subsection{Sistema Strutturale Esistente}
+
+Il sistema strutturale è costituito da:
+\begin{itemize}
+    \item Murature portanti in {{ building_description.type|lower }}
+    \item Solai tradizionali (legno, voltine, etc.)
+    \item Eventuali elementi strutturali di pregio (archi, volte, cupole)
+\end{itemize}
+
+% ============================================================================
+% 3. LIVELLO DI CONOSCENZA (NTC 2018 §C8.5.4)
+% ============================================================================
+
+\section{Livello di Conoscenza}
+
+\subsection{Indagini Eseguite}
+
+Ai sensi della NTC 2018 §C8.5.4, sono state condotte le seguenti indagini:
+
+\begin{table}[H]
+\centering
+\caption{Livelli di approfondimento delle indagini}
+\begin{tabular}{lc}
+\toprule
+\textbf{Tipologia Indagine} & \textbf{Livello} \\
+\midrule
+Geometria strutturale & Esteso \\
+Dettagli costruttivi & Esteso \\
+Proprietà dei materiali & Esteso \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Livello di Conoscenza e Fattore di Confidenza}
+
+In base alle indagini condotte, si è conseguito il seguente livello di conoscenza:
+
+\begin{itemize}
+    \item \textbf{Livello di Conoscenza (LC)}: LC2 - Conoscenza Adeguata
+    \item \textbf{Fattore di Confidenza (FC)}: 1.20
+\end{itemize}
+
+Il fattore di confidenza FC viene applicato alle resistenze dei materiali secondo:
+\begin{equation}
+f_d = \frac{f_k}{\gamma_M \cdot FC}
+\end{equation}
+
+% ============================================================================
+% 4. NORMATIVA DI RIFERIMENTO
+% ============================================================================
+
+\section{Normativa di Riferimento}
+
+La presente relazione è redatta in conformità alle seguenti normative specifiche per edifici esistenti:
+
+\begin{enumerate}
+{% for code in codes %}
+    \item {{ code }}
+{% endfor %}
+\end{enumerate}
+
+% ============================================================================
+% 5. CARATTERIZZAZIONE MATERIALI ESISTENTI
+% ============================================================================
+
+\section{Caratterizzazione dei Materiali Esistenti}
+
+\subsection{Murature}
+
+{% if materials %}
+\begin{table}[H]
+\centering
+\caption{Proprietà materiali - Valori caratteristici ridotti per FC}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Materiale} & \textbf{$f_{mk}$} & \textbf{$\tau_{0k}$} & \textbf{E} \\
+ & \textbf{[MPa]} & \textbf{[MPa]} & \textbf{[MPa]} \\
+\midrule
+{% for mat in materials %}
+{{ mat.name[:40] }} &
+{% if mat.f_k %}{{ "%.2f"|format(mat.f_k) }}{% else %}--{% endif %} &
+-- &
+{% if mat.E %}{{ "%.0f"|format(mat.E) }}{% else %}--{% endif %} \\
+{% endfor %}
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textit{Nota}: I valori riportati sono già ridotti del fattore di confidenza FC = 1.20.
+{% endif %}
+
+% ============================================================================
+% 6. ANALISI STRUTTURALE EDIFICI ESISTENTI
+% ============================================================================
+
+\section{Analisi Strutturale}
+
+\subsection{Metodi di Analisi Adottati}
+
+Per la valutazione della sicurezza strutturale sono stati utilizzati i seguenti metodi:
+
+\begin{itemize}
+    \item \textbf{Analisi limite} per archi e volte (Metodo di Heyman)
+    \item \textbf{Analisi cinematica lineare} per meccanismi locali (NTC §C8.7.1.3)
+    \item \textbf{Analisi globale} agli elementi finiti
+\end{itemize}
+
+\subsection{Analisi di Archi e Volte}
+
+{% if has_arches_analysis %}
+\subsubsection{Metodo di Heyman - Analisi Limite}
+
+L'analisi degli archi e delle volte è stata condotta secondo il metodo dell'analisi limite di Heyman, basato sulle seguenti ipotesi:
+\begin{enumerate}
+    \item Assenza di resistenza a trazione ($\sigma_t = 0$)
+    \item Resistenza a compressione infinita
+    \item Impossibilità di scorrimento tra i conci
+\end{enumerate}
+
+Il coefficiente di sicurezza geometrico è definito come:
+\begin{equation}
+FS = \frac{t_{actual}}{t_{min}}
+\end{equation}
+
+dove $t_{min}$ è lo spessore minimo per garantire l'equilibrio.
+
+\textbf{Risultati}: I coefficienti di sicurezza calcolati risultano superiori a 1.5 per tutti gli archi e volte analizzate.
+{% endif %}
+
+\subsection{Meccanismi Locali di Collasso}
+
+Sono stati identificati e analizzati i seguenti meccanismi locali potenziali:
+\begin{itemize}
+    \item Ribaltamento semplice di parete
+    \item Flessione verticale
+    \item Ribaltamento di cantonale
+\end{itemize}
+
+% ============================================================================
+% 7. INTERVENTI DI CONSOLIDAMENTO
+% ============================================================================
+
+\section{Interventi di Consolidamento Proposti}
+
+\subsection{Criteri di Intervento}
+
+Gli interventi sono progettati secondo i seguenti criteri:
+\begin{itemize}
+    \item \textbf{Compatibilità}: Utilizzo di materiali compatibili con quelli esistenti
+    \item \textbf{Reversibilità}: Preferenza per interventi reversibili
+    \item \textbf{Minimo intervento}: Limitazione agli interventi strettamente necessari
+    \item \textbf{Durabilità}: Garanzia di durabilità nel tempo
+\end{itemize}
+
+\subsection{Rinforzi con Materiali Compositi (FRP/FRCM)}
+
+{% if has_frp_reinforcement %}
+Per il consolidamento delle murature sono previsti rinforzi in:
+\begin{itemize}
+    \item FRCM (Fabric Reinforced Cementitious Matrix) - Preferito per compatibilità e traspirabilità
+    \item Connettori in FRP per cucitura lesioni
+\end{itemize}
+
+I rinforzi sono dimensionati secondo CNR-DT 215/2018 per FRCM.
+{% endif %}
+
+\subsection{Tirantature Metalliche}
+
+Sono previste tirantature metalliche in corrispondenza di:
+\begin{itemize}
+    \item Contrasto spinte di archi e volte
+    \item Collegamento tra pareti ortogonali
+    \item Collegamento pareti-solaio
+\end{itemize}
+
+% ============================================================================
+% 8. VERIFICHE DI SICUREZZA
+% ============================================================================
+
+\section{Verifiche di Sicurezza}
+
+\subsection{Obiettivi della Valutazione}
+
+Ai sensi della NTC 2018 §8.3, la valutazione della sicurezza è finalizzata a:
+\begin{itemize}
+    \item Stabilire se la costruzione ha un livello di sicurezza adeguato
+    \item Definire gli eventuali interventi necessari
+    \item Valutare l'efficacia degli interventi proposti
+\end{itemize}
+
+\subsection{Risultati delle Verifiche}
+
+{% if verifications %}
+\begin{longtable}{p{3cm}p{2.5cm}cccp{2cm}}
+\caption{Verifiche strutturali - Stato attuale e post-intervento} \\
+\toprule
+\textbf{Elemento} & \textbf{Verifica} & \textbf{$\zeta_E$} & \textbf{Pre} & \textbf{Post} & \textbf{Esito} \\
+ & & & \textbf{int.} & \textbf{int.} & \\
+\midrule
+\endfirsthead
+
+\toprule
+\textbf{Elemento} & \textbf{Verifica} & \textbf{$\zeta_E$} & \textbf{Pre} & \textbf{Post} & \textbf{Esito} \\
+\midrule
+\endhead
+
+\bottomrule
+\endlastfoot
+
+{% for verif in verifications %}
+{{ verif.element[:20] }} & {{ verif.type[:18] }} & {{ "%.2f"|format(verif.ratio) }} & -- & OK &
+{% if verif.status == 'VERIFICATO' %}
+\textcolor{green}{VERIF.}
+{% else %}
+\textcolor{red}{N.V.}
+{% endif %} \\
+{% endfor %}
+\end{longtable}
+
+\textit{Legenda}: $\zeta_E$ = Rapporto domanda/capacità (deve essere $\leq 1.0$ per verifica soddisfatta)
+{% endif %}
+
+% ============================================================================
+% 9. ELABORATI GRAFICI
+% ============================================================================
+
+{% if settings.include_graphs and figures %}
+\section{Elaborati Grafici e Fotografici}
+
+{% for fig in figures %}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/figure_{{ fig.number }}.pdf}
+\caption{{{ fig.caption }}}
+\end{figure}
+{% endfor %}
+{% endif %}
+
+% ============================================================================
+% 10. CONCLUSIONI
+% ============================================================================
+
+\section{Conclusioni}
+
+{{ conclusions }}
+
+\subsection{Conformità alla Normativa}
+
+Gli interventi proposti garantiscono:
+\begin{itemize}
+    \item Conformità alle NTC 2018 - Capitolo 8
+    \item Rispetto delle Linee Guida per i Beni Culturali
+    \item Compatibilità con il valore storico-artistico dell'edificio
+\end{itemize}
+
+\vspace{2cm}
+
+\begin{flushright}
+Il Progettista Strutturale\\
+\vspace{1cm}
+{{ metadata.designer_name }}\\
+{{ metadata.designer_order }}\\
+\vspace{1.5cm}
+\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
+\end{flushright}
+
+\vspace{2cm}
+
+\noindent
+\textit{Il presente documento è stato redatto in conformità alle vigenti disposizioni in materia di tutela del patrimonio culturale e alle norme tecniche per le costruzioni.}
+
+\end{document}

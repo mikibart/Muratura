@@ -1,0 +1,419 @@
+\documentclass[{{ settings.font_size }}pt,{{ settings.page_size|lower }}paper]{article}
+
+% ============================================================================
+% Template: NTC 2018 Standard
+% Relazione di Calcolo Strutturale
+% Conforme a NTC 2018 §10.1
+% ============================================================================
+
+% Encoding e lingua
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+
+% Grafica e tabelle
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+
+% Layout pagina
+\usepackage{geometry}
+\geometry{
+    {{ settings.page_size|lower }}paper,
+    top=2.5cm,
+    bottom=2.5cm,
+    left=3cm,
+    right=2cm,
+    headheight=14pt,
+    footskip=1cm
+}
+
+% Header e footer
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small {{ metadata.project_name[:50] }}}
+\fancyhead[R]{\small \thepage}
+\fancyfoot[C]{\small {{ metadata.designer_name }} - {{ metadata.report_date }}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% Hyperlinks
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    pdftitle={{ metadata.project_name }},
+    pdfauthor={{ metadata.designer_name }},
+}
+
+% Matematica
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Liste personalizzate
+\usepackage{enumitem}
+
+% Colori
+\usepackage{xcolor}
+\definecolor{ntcblue}{RGB}{0,51,153}
+\definecolor{ntcgray}{RGB}{100,100,100}
+
+% ============================================================================
+% Informazioni Documento
+% ============================================================================
+
+\title{
+    \vspace{-2cm}
+    \begin{center}
+    \includegraphics[width=0.15\textwidth]{{{ settings.logo_path }}}
+    \end{center}
+    \vspace{0.5cm}
+    {\Huge \textbf{ {{ metadata.project_name }} }}\\
+    \vspace{0.5cm}
+    {\Large Relazione di Calcolo Strutturale}\\
+    \vspace{0.3cm}
+    {\large Conforme a NTC 2018 - D.M. 17/01/2018}
+}
+
+\author{
+    \textbf{Progettista Strutturale}\\
+    {{ metadata.designer_name }}\\
+    {{ metadata.designer_order }}\\
+    {% if metadata.designer_address %}
+    {{ metadata.designer_address }}
+    {% endif %}
+}
+
+\date{{{ metadata.report_date }} - Rev. {{ metadata.revision }}}
+
+% ============================================================================
+% Documento
+% ============================================================================
+
+\begin{document}
+
+% Frontespizio
+\maketitle
+\thispagestyle{empty}
+
+\vfill
+
+\begin{center}
+\begin{tabular}{|l|p{10cm}|}
+\hline
+\textbf{Progetto} & {{ metadata.project_name }} \\
+\hline
+\textbf{Località} & {{ metadata.project_location }} \\
+{% if metadata.project_address %}
+\hline
+\textbf{Indirizzo} & {{ metadata.project_address }} \\
+{% endif %}
+\hline
+\textbf{Committente} & {{ metadata.client_name }} \\
+{% if metadata.client_address %}
+\hline
+ & {{ metadata.client_address }} \\
+{% endif %}
+\hline
+\textbf{Data} & {{ metadata.report_date }} \\
+\hline
+\textbf{Revisione} & {{ metadata.revision }} \\
+\hline
+\end{tabular}
+\end{center}
+
+\vfill
+
+\clearpage
+
+% Indice
+{% if settings.include_toc %}
+\tableofcontents
+\clearpage
+{% endif %}
+
+% ============================================================================
+% 1. PREMESSA
+% ============================================================================
+
+\section{Premessa}
+
+{{ introduction }}
+
+% ============================================================================
+% 2. DESCRIZIONE DELL'OPERA
+% ============================================================================
+
+\section{Descrizione dell'Opera}
+
+\subsection{Generalità}
+
+{{ building_description.text }}
+
+\subsection{Caratteristiche Edificio}
+
+\begin{itemize}
+    \item \textbf{Tipologia}: {{ building_description.type }}
+    \item \textbf{Destinazione d'uso}: {{ building_description.usage }}
+    {% if building_description.num_stories != 'N/D' %}
+    \item \textbf{Numero di piani}: {{ building_description.num_stories }}
+    {% endif %}
+    {% if building_description.construction_period != 'N/D' %}
+    \item \textbf{Epoca costruzione}: {{ building_description.construction_period }}
+    {% endif %}
+    {% if building_description.total_height %}
+    \item \textbf{Altezza totale}: {{ "%.2f"|format(building_description.total_height) }} m
+    {% endif %}
+\end{itemize}
+
+% ============================================================================
+% 3. NORMATIVA DI RIFERIMENTO
+% ============================================================================
+
+\section{Normativa di Riferimento}
+
+La presente relazione è redatta in conformità alle seguenti normative tecniche:
+
+\begin{enumerate}[label=\arabic*.]
+{% for code in codes %}
+    \item {{ code }}
+{% endfor %}
+\end{enumerate}
+
+% ============================================================================
+% 4. CARATTERIZZAZIONE MATERIALI
+% ============================================================================
+
+\section{Caratterizzazione dei Materiali}
+
+\subsection{Materiali Strutturali}
+
+{% if materials %}
+\begin{table}[H]
+\centering
+\caption{Materiali utilizzati - Proprietà caratteristiche}
+\label{tab:materiali}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Materiale} & \textbf{Tipo} & \textbf{$f_k$} & \textbf{E} & \textbf{$\gamma$} \\
+ & & \textbf{[MPa]} & \textbf{[MPa]} & \textbf{[kN/m³]} \\
+\midrule
+{% for mat in materials %}
+{{ mat.name[:40] }} & {{ mat.type }} &
+{% if mat.f_k %}{{ "%.2f"|format(mat.f_k) }}{% else %}--{% endif %} &
+{% if mat.E %}{{ "%.0f"|format(mat.E) }}{% else %}--{% endif %} &
+{% if mat.density %}{{ "%.1f"|format(mat.density) }}{% else %}--{% endif %} \\
+{% endfor %}
+\bottomrule
+\end{tabular}
+\end{table}
+{% endif %}
+
+% ============================================================================
+% 5. AZIONI DI PROGETTO
+% ============================================================================
+
+\section{Azioni di Progetto}
+
+\subsection{Carichi Permanenti}
+
+\subsubsection{Pesi propri strutturali (G$_1$)}
+{{ loads.permanent_G1.description }}
+
+\subsubsection{Carichi permanenti portati (G$_2$)}
+{{ loads.permanent_G2.description }}
+
+\subsection{Carichi Variabili}
+
+\subsubsection{Sovraccarichi variabili (Q)}
+{{ loads.variable_Q.description }}
+
+{% if seismic_action %}
+\subsection{Azione Sismica}
+
+L'azione sismica è definita secondo NTC 2018 §3.2 per la località di {{ seismic_action.location }}.
+
+\begin{table}[H]
+\centering
+\caption{Parametri sismici di base}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parametro} & \textbf{Valore} \\
+\midrule
+Accelerazione massima attesa $a_g$ & {{ "%.3f"|format(seismic_action.ag) }} g \\
+Fattore amplificazione spettro $F_0$ & {{ "%.2f"|format(seismic_action.F0) }} \\
+Periodo inizio spettro $T_C^*$ & {{ "%.2f"|format(seismic_action.Tc_star) }} s \\
+Categoria sottosuolo & {{ seismic_action.soil_type }} \\
+Categoria topografica & {{ seismic_action.topographic_category }} \\
+Vita nominale $V_N$ & {{ seismic_action.nominal_life }} anni \\
+Classe d'uso & {{ seismic_action.usage_class }} \\
+Stato limite & {{ seismic_action.limit_state }} \\
+\bottomrule
+\end{tabular}
+\end{table}
+{% endif %}
+
+% ============================================================================
+% 6. MODELLAZIONE STRUTTURALE
+% ============================================================================
+
+\section{Modellazione Strutturale}
+
+\subsection{Software Utilizzato}
+
+{{ modeling_assumptions.software }}
+
+\subsection{Metodo di Analisi}
+
+{{ modeling_assumptions.method }}
+
+\subsection{Ipotesi di Calcolo}
+
+\begin{itemize}
+{% for assumption in modeling_assumptions.assumptions %}
+    \item {{ assumption }}
+{% endfor %}
+\end{itemize}
+
+% ============================================================================
+% 7. ANALISI STRUTTURALE
+% ============================================================================
+
+\section{Analisi Strutturale}
+
+\subsection{Analisi Statica}
+
+{% if analysis_results.static_analysis.completed %}
+L'analisi statica è stata completata con successo.
+
+{% if analysis_results.static_analysis.max_displacement %}
+\begin{itemize}
+    \item \textbf{Spostamento massimo}: {{ "%.2f"|format(analysis_results.static_analysis.max_displacement) }} mm
+    {% if analysis_results.static_analysis.max_stress %}
+    \item \textbf{Tensione massima}: {{ "%.2f"|format(analysis_results.static_analysis.max_stress) }} MPa
+    {% endif %}
+\end{itemize}
+{% endif %}
+{% endif %}
+
+{% if analysis_results.seismic_analysis.completed %}
+\subsection{Analisi Sismica}
+
+L'analisi sismica è stata eseguita secondo NTC 2018 §7.3.
+
+{% if analysis_results.seismic_analysis.fundamental_period %}
+\begin{itemize}
+    \item \textbf{Periodo fondamentale $T_1$}: {{ "%.3f"|format(analysis_results.seismic_analysis.fundamental_period) }} s
+    {% if analysis_results.seismic_analysis.participation_factor %}
+    \item \textbf{Fattore partecipazione modale}: {{ "%.2f"|format(analysis_results.seismic_analysis.participation_factor) }}
+    {% endif %}
+\end{itemize}
+{% endif %}
+{% endif %}
+
+% ============================================================================
+% 8. VERIFICHE STRUTTURALI
+% ============================================================================
+
+\section{Verifiche Strutturali}
+
+\subsection{Criteri di Verifica}
+
+Le verifiche sono condotte secondo NTC 2018 §4.5 per strutture in muratura, considerando:
+\begin{itemize}
+    \item Stati Limite Ultimi (SLU): resistenza e stabilità
+    \item Stati Limite di Esercizio (SLE): deformabilità
+\end{itemize}
+
+\subsection{Riassunto Verifiche}
+
+{% if verifications %}
+\begin{longtable}{p{3.5cm}p{3cm}cccl}
+\caption{Verifiche strutturali - Riassunto} \\
+\toprule
+\textbf{Elemento} & \textbf{Verifica} & \textbf{$E_d$} & \textbf{$R_d$} & \textbf{$E_d/R_d$} & \textbf{Esito} \\
+\midrule
+\endfirsthead
+
+\multicolumn{6}{c}%
+{{\tablename\ \thetable{} -- continua}} \\
+\toprule
+\textbf{Elemento} & \textbf{Verifica} & \textbf{$E_d$} & \textbf{$R_d$} & \textbf{$E_d/R_d$} & \textbf{Esito} \\
+\midrule
+\endhead
+
+\midrule
+\multicolumn{6}{r}{{Continua nella pagina successiva}} \\
+\endfoot
+
+\bottomrule
+\endlastfoot
+
+{% for verif in verifications %}
+{{ verif.element[:25] }} & {{ verif.type[:20] }} & {{ "%.2f"|format(verif.demand) }} & {{ "%.2f"|format(verif.capacity) }} & {{ "%.3f"|format(verif.ratio) }} &
+{% if verif.status == 'VERIFICATO' %}
+\textcolor{green}{\textbf{VERIFICATO}}
+{% else %}
+\textcolor{red}{\textbf{NON VERIF.}}
+{% endif %} \\
+{% endfor %}
+\end{longtable}
+{% endif %}
+
+% ============================================================================
+% 9. ELABORATI GRAFICI
+% ============================================================================
+
+{% if settings.include_graphs and figures %}
+\section{Elaborati Grafici}
+
+{% for fig in figures %}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/figure_{{ fig.number }}.pdf}
+\caption{{{ fig.caption }}}
+\label{fig:{{ fig.number }}}
+\end{figure}
+{% endfor %}
+{% endif %}
+
+% ============================================================================
+% 10. CONCLUSIONI
+% ============================================================================
+
+\section{Conclusioni}
+
+{{ conclusions }}
+
+\vspace{1cm}
+
+\begin{flushright}
+Il Progettista Strutturale\\
+\vspace{0.5cm}
+{{ metadata.designer_name }}\\
+{{ metadata.designer_order }}\\
+\vspace{1cm}
+\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
+\end{flushright}
+
+% ============================================================================
+% APPENDICE (opzionale)
+% ============================================================================
+
+{% if settings.include_appendix %}
+\clearpage
+\appendix
+
+\section{Tabulati di Calcolo}
+
+In questa appendice sono riportati i tabulati dettagliati delle verifiche strutturali.
+
+{% endif %}
+
+\end{document}
