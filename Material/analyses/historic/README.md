@@ -6,9 +6,9 @@
 ## 📋 Contenuto Pianificato
 
 ### Moduli Implementati
-- [ ] `arches.py` - Analisi archi metodo Heyman (limite analysis)
-- [ ] `vaults.py` - Analisi volte (botte, crociera, cupole)
-- [ ] `towers.py` - Analisi torri e pilastri snelli
+- [x] `arches.py` - Analisi archi metodo Heyman (limite analysis) ✅
+- [x] `vaults.py` - Analisi volte (botte, crociera, cupole) ✅
+- [ ] `towers.py` - Analisi torri e pilastri snelli 🔄
 
 ### Metodologie
 - **Analisi Limite** (Heyman, 1966-1982)
@@ -43,12 +43,12 @@
 ## 🎯 Obiettivi Fase 2
 
 - [x] Pianificazione completa (✅ COMPLETATO)
-- [ ] Implementazione modulo archi
-- [ ] Implementazione modulo volte
-- [ ] Modulo rinforzi FRP/FRCM
-- [ ] Sistema Knowledge Levels (LC1/LC2/LC3)
-- [ ] Esempi edifici storici reali
-- [ ] Validazione vs software commerciali
+- [x] Implementazione modulo archi (✅ COMPLETATO)
+- [x] Implementazione modulo volte (✅ COMPLETATO)
+- [ ] Modulo rinforzi FRP/FRCM 🔄
+- [ ] Sistema Knowledge Levels (LC1/LC2/LC3) 🔄
+- [x] Esempi edifici storici reali (✅ 8 esempi)
+- [ ] Validazione vs software commerciali 🔄
 
 ## 📊 Timeline
 
