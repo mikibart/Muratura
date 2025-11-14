@@ -10,7 +10,7 @@ Target: Q2 2025
 
 Moduli:
 - arches.py: Analisi archi metodo Heyman ✅ IMPLEMENTATO
-- vaults.py: Analisi volte (botte, crociera, cupole) 🔄 TODO
+- vaults.py: Analisi volte (botte, crociera, cupole) ✅ IMPLEMENTATO
 - towers.py: Analisi torri e pilastri snelli 🔄 TODO
 
 Per dettagli completi vedere:
@@ -26,18 +26,31 @@ from .arches import (
     ArchAnalysis,
     ArchGeometry,
     ArchType,
-    FailureMode,
+    FailureMode as ArchFailureMode,
     MASONRY_DENSITIES
 )
 
+from .vaults import (
+    VaultAnalysis,
+    VaultGeometry,
+    VaultType,
+    FailureMode as VaultFailureMode
+)
+
 __all__ = [
+    # Arches
     'ArchAnalysis',
     'ArchGeometry',
     'ArchType',
-    'FailureMode',
+    'ArchFailureMode',
+    # Vaults
+    'VaultAnalysis',
+    'VaultGeometry',
+    'VaultType',
+    'VaultFailureMode',
+    # Common
     'MASONRY_DENSITIES',
 ]
 
 # TODO Fase 2:
-# from .vaults import VaultAnalysis, VaultGeometry
 # from .towers import TowerAnalysis
