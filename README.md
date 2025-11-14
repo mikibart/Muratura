@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Phase1](https://img.shields.io/badge/Fase%201-Completata-success.svg)
 ![Phase2](https://img.shields.io/badge/Fase%202-Completata-success.svg)
-![Phase3](https://img.shields.io/badge/Fase%203-In%20Progress-yellow.svg)
+![Phase3](https://img.shields.io/badge/Fase%203-Completata-success.svg)
 
 Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura conforme alle **Norme Tecniche per le Costruzioni NTC 2018** e **Eurocodice 8**.
 
@@ -31,7 +31,7 @@ Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura
 - ✅ **Rinforzi FRP/FRCM**: CFRP, GFRP, AFRP, C-FRCM - CNR-DT 200/215 compliant
 - ✅ **Knowledge Levels**: LC1/LC2/LC3 con fattori confidenza FC secondo NTC 2018 §8.5.4
 
-### 🔄 BIM & Report Generation (Fase 3 - v7.0) 🚧 IN PROGRESS
+### 🔄 BIM & Report Generation (Fase 3 - v7.0) ✅ COMPLETATA!
 - ✅ **IFC Import**: Import modelli BIM da Revit, ArchiCAD, Tekla (IFC 2x3/4)
   - Estrazione geometria pareti, solai, materiali
   - Material mapping automatico (masonry, concrete, steel, wood)
@@ -43,8 +43,15 @@ Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura
   - Grafici matplotlib integrati
   - Template Jinja2 personalizzabili
   - 17 test passing
-- 🔄 **IFC Export**: Export risultati → IFC structural (TODO)
-- 🔄 **Template Customization**: LaTeX templates personalizzabili (TODO)
+- ✅ **IFC Export**: Export risultati → IFC Structural Analysis View
+  - IfcStructuralAnalysisModel generation
+  - Nodi, membri, carichi, risultati
+  - IFC 2x3 e IFC 4 support
+  - 21 test passing
+- ✅ **Custom Templates**: LaTeX templates personalizzabili
+  - ntc2018_standard.tex (edifici moderni)
+  - ntc2018_historic.tex (patrimonio culturale)
+  - Frontespizio, TOC, header/footer custom
 
 ### Conformità Normativa
 - ✅ **NTC 2018** completa + Circolare 2019 (incl. Cap. 8 Edifici Esistenti)

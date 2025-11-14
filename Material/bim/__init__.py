@@ -10,7 +10,7 @@ Target: Q2-Q3 2025
 
 Moduli:
 - ifc_import.py: Import modelli IFC → Muratura FEM ✅ IMPLEMENTATO
-- ifc_export.py: Export risultati → IFC structural 🔄 TODO
+- ifc_export.py: Export risultati → IFC structural ✅ IMPLEMENTATO
 - revit_plugin.py: Plugin base per Autodesk Revit 🔄 TODO
 
 Per dettagli completi vedere:
@@ -26,7 +26,20 @@ from .ifc_import import (
     IFCImportSettings
 )
 
+from .ifc_export import (
+    IFCExporter,
+    IFCExportSettings,
+    StructuralNode,
+    StructuralMember,
+    StructuralLoad
+)
+
 __all__ = [
     'IFCImporter',
     'IFCImportSettings',
+    'IFCExporter',
+    'IFCExportSettings',
+    'StructuralNode',
+    'StructuralMember',
+    'StructuralLoad',
 ]
