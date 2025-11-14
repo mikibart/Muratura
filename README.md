@@ -1,19 +1,33 @@
 # Muratura FEM - Sistema di Calcolo Strutturale
 
-![Version](https://img.shields.io/badge/version-6.1-blue.svg)
+![Version](https://img.shields.io/badge/version-6.2-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Phase1](https://img.shields.io/badge/Fase%201-Completata-success.svg)
 
 Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura conforme alle **Norme Tecniche per le Costruzioni NTC 2018** e **Eurocodice 8**.
 
+🎉 **NOVITÀ v6.2**: Feature parity BASE raggiunta con software commerciali italiani (3Muri, Aedes, CDSWin)
+
 ## 🎯 Caratteristiche Principali
 
+### Analisi Murature
 - ✅ **7 Metodi di Analisi**: FEM, POR, SAM, Frame Equivalente, Analisi Limite, Fiber Model, Micro-modellazione
 - ✅ **Modelli Costitutivi Avanzati**: Lineare elastico, Bilineare, Parabolico, Mander, Kent-Park, Popovics
 - ✅ **Analisi Dinamiche**: Modale, Pushover, Time-History con Newmark-β
-- ✅ **Conformità Normativa**: NTC 2018, EC8, verifiche automatiche secondo normativa italiana
 - ✅ **Geometrie Complete**: Maschi murari, fasce di piano, pareti complete con aperture
 - ✅ **24 Cinematismi**: Tutti i meccanismi di collasso secondo EC8/NTC2018
+
+### 🆕 Elementi Strutturali Integrati (Fase 1 - v6.2)
+- ✅ **Solai**: Latero-cemento, legno, acciaio, prefabbricati - Database materiali commerciali italiani
+- ✅ **Balconi**: C.a. a sbalzo, acciaio (HEA/IPE/UPN) - ⚠️ Verifica CRITICA ancoraggio muratura
+- ✅ **Scale**: Soletta rampante, sbalzo, ginocchio - Validazione geometrica DM 236/89
+
+### Conformità Normativa
+- ✅ **NTC 2018** completa + Circolare 2019
+- ✅ **Eurocodice 8** (EC8)
+- ✅ **DM 236/89** (geometria scale)
+- ✅ **CNR-DT 200/215** (rinforzi FRP/FRCM - in sviluppo Fase 2)
 
 ## 📋 Requisiti
 
