@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "muratura"
+version = "1.0.0"
+description = "Sistema completo di analisi strutturale per murature secondo NTC 2018"
+readme = "README.md"
+authors = [
+    {name = "MasonryFEM Contributors"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+keywords = ["structural-engineering", "masonry", "fem", "ntc2018", "seismic-analysis"]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.21.0,<2.0.0",
+    "scipy>=1.7.0,<2.0.0",
+    "openpyxl>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=3.0.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+    "mypy>=0.950",
+]
+docs = [
+    "sphinx>=4.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+]
+viz = [
+    "matplotlib>=3.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mikibart/Muratura"
+Documentation = "https://muratura.readthedocs.io/"
+Repository = "https://github.com/mikibart/Muratura"
+Issues = "https://github.com/mikibart/Muratura/issues"
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=muratura --cov-report=html --cov-report=term"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
