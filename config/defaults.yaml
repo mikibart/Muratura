@@ -1,0 +1,114 @@
+# Configurazione di default per Muratura FEM
+# Può essere sovrascritto da config/local.yaml (non versionato)
+
+# Parametri analisi generali
+analysis:
+  # Coefficienti di sicurezza NTC 2018
+  gamma_m: 2.0              # Muratura esistente
+  gamma_m_new: 2.5          # Muratura nuova
+  FC: 1.0                   # Fattore di confidenza base
+
+  # Tolleranze numeriche
+  tolerance: 1.0e-6
+  max_iterations: 100
+
+# Parametri solver FEM
+solver:
+  # Solver lineare
+  sparse_solver: 'scipy'    # 'scipy', 'pardiso', 'umfpack'
+  factorization: 'lu'       # 'lu', 'cholesky'
+
+  # Analisi non-lineare
+  newton_raphson:
+    max_iterations: 50
+    tolerance: 1.0e-4
+    line_search: true
+
+  # Analisi modale
+  modal:
+    min_modes: 3
+    max_modes: 12
+    mass_participation_threshold: 0.85
+
+# Parametri analisi pushover
+pushover:
+  default_pattern: 'triangular'  # 'triangular', 'uniform', 'modal'
+  default_target_drift: 0.04     # 4%
+  default_steps: 50
+  max_drift: 0.10               # 10% (safety limit)
+
+# Parametri analisi time-history
+time_history:
+  default_dt: 0.01              # 10ms
+  damping_ratio: 0.05           # 5%
+  newmark_beta: 0.25
+  newmark_gamma: 0.50
+
+# Livelli di prestazione (EC8/NTC)
+performance_levels:
+  DL:  # Damage Limitation
+    drift: 0.005
+    description: "Nessun danno strutturale"
+
+  SD:  # Significant Damage
+    drift: 0.015
+    description: "Danno riparabile"
+
+  NC:  # Near Collapse
+    drift: 0.030
+    description: "Danno grave, possibile collasso"
+
+# Geometria - parametri di default
+geometry:
+  min_pier_width: 0.30          # m
+  min_spandrel_height: 0.20     # m
+  pier_width_ratio: 0.30        # 30% interasse
+  spandrel_height_ratio: 0.20   # 20% interpiano
+
+# Materiali - valori tipici per reference
+materials:
+  # Muratura di mattoni pieni
+  brick_solid:
+    E: 1500.0
+    fcm: 4.0
+    ftm: 0.15
+    tau0: 0.1
+    mu: 0.4
+    G: 500.0
+    weight: 18.0
+
+  # Muratura di tufo
+  tuff:
+    E: 1200.0
+    fcm: 2.6
+    ftm: 0.1
+    tau0: 0.056
+    mu: 0.4
+    G: 400.0
+    weight: 16.0
+
+  # Muratura di pietra
+  stone:
+    E: 1400.0
+    fcm: 3.2
+    ftm: 0.12
+    tau0: 0.075
+    mu: 0.4
+    G: 470.0
+    weight: 20.0
+
+# Logging
+logging:
+  level: 'INFO'               # DEBUG, INFO, WARNING, ERROR
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  to_file: false
+  file_path: 'logs/muratura.log'
+
+# Output
+output:
+  default_format: 'json'      # 'json', 'yaml', 'csv'
+  precision: 6                # Cifre decimali
+  plots:
+    dpi: 300
+    format: 'png'             # 'png', 'pdf', 'svg'
+    style: 'seaborn'

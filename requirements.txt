@@ -1,0 +1,23 @@
+# Muratura FEM - Sistema di Calcolo Strutturale per Murature
+# Requirements per Python 3.8+
+
+# Core scientific computing
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0,<2.0.0
+
+# Visualization
+matplotlib>=3.7.0,<4.0.0
+
+# Data handling (optional, ma utile per export)
+pandas>=2.0.0,<3.0.0
+
+# Type checking support (Python < 3.10)
+typing-extensions>=4.5.0
+
+# Development dependencies (commentate per produzione, decommentare per dev)
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.0.0
+# flake8>=6.0.0
+# mypy>=1.4.0
+# pylint>=2.17.0
