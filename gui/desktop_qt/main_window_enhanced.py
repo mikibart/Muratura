@@ -55,7 +55,7 @@ except ImportError as e:
 
 
 class AnalysisThread(QThread):
-    """Thread per eseguire analisi in background."""
+    """Thread per eseguire analisi REALE in background (NO MOCK)."""
 
     progress = pyqtSignal(int, str)
     finished_signal = pyqtSignal(dict)
@@ -66,77 +66,64 @@ class AnalysisThread(QThread):
         self.project = project
 
     def run(self):
-        """Run analysis."""
+        """Run REAL FEM analysis (no mock)."""
         try:
-            self.progress.emit(10, "Initializing FEM engine...")
+            self.progress.emit(10, "Initializing REAL FEM engine...")
 
-            # Import here to avoid issues
+            # Import REAL FEM integration
             try:
-                from Material import MasonryFEMEngine
+                from real_fem_integration import get_real_analysis_engine
             except:
-                self.error_signal.emit("MasonryFEMEngine not available")
+                self.error_signal.emit("Real FEM integration not available")
                 return
 
-            self.progress.emit(30, "Building model...")
+            real_engine = get_real_analysis_engine()
 
-            # Create FEM model
-            model = MasonryFEMEngine()
+            self.progress.emit(30, "Building REAL model from project data...")
 
-            # Add materials
-            if self.project.materials:
-                mat = self.project.materials[0]
-                model.set_material(
-                    f_m_k=mat.get('f_mk', 2.4),
-                    E=mat.get('E', 1500),
-                    w=mat.get('weight', 18.0)
-                )
-
-            self.progress.emit(50, "Adding elements...")
-
-            # Add walls
-            for wall in self.project.walls:
-                model.add_wall(
-                    length=wall.get('length', 5.0),
-                    height=wall.get('height', 3.0),
-                    thickness=wall.get('thickness', 0.3)
-                )
-
-            self.progress.emit(70, "Applying loads...")
-
-            # Add loads
-            for load in self.project.loads:
-                if 'Vertical' in load.get('type', ''):
-                    model.add_vertical_load(load.get('value', 100))
-
-            self.progress.emit(85, "Running analysis...")
-
-            # Run analysis
-            try:
-                model.run_analysis()
-            except Exception as e:
-                # Even if analysis fails, create mock results
-                pass
-
-            self.progress.emit(95, "Processing results...")
-
-            # Get results (or create mock results)
-            results = {
-                'success': True,
-                'n_walls': len(self.project.walls),
-                'n_loads': len(self.project.loads),
-                'max_displacement': 2.5,
-                'max_stress': 1.35,
-                'verifications': [
-                    {'element': f'Wall {i+1}', 'ratio': 0.65 + i*0.05, 'status': 'OK'}
-                    for i in range(len(self.project.walls))
-                ]
+            # Prepare project data for REAL analysis
+            project_data = {
+                'walls': self.project.walls,
+                'materials': self.project.materials,
+                'loads': self.project.loads,
+                'analysis_type': self.project.analysis_type,
+                'analysis_settings': self.project.analysis_settings
             }
 
-            self.progress.emit(100, "Complete!")
-            self.finished_signal.emit(results)
+            self.progress.emit(50, "Running REAL FEM analysis...")
+
+            # RUN REAL ANALYSIS (NO MOCK!)
+            results = real_engine.run_real_analysis(project_data)
+
+            if not results.get('success', False):
+                error_msg = results.get('error', 'Unknown error')
+                self.error_signal.emit(f"REAL analysis failed: {error_msg}")
+                return
+
+            self.progress.emit(85, "Processing REAL results...")
+
+            # Extract REAL data
+            processed_results = {
+                'success': True,
+                'mock': False,  # THIS IS REAL!
+                'n_walls': len(self.project.walls),
+                'n_materials': len(self.project.materials),
+                'n_loads': len(self.project.loads),
+                'max_displacement': results.get('max_displacement', 0),
+                'max_stress': results.get('max_stress', 0),
+                'verifications': results.get('verifications', []),
+                'pushover_data': results.get('pushover_data'),
+                'modal_data': results.get('modal_data'),
+                'summary': results.get('summary', {}),
+                'raw_results': results.get('raw_results', {})
+            }
+
+            self.progress.emit(100, "REAL analysis complete!")
+            self.finished_signal.emit(processed_results)
 
         except Exception as e:
-            self.error_signal.emit(f"Analysis error: {str(e)}")
+            import traceback
+            self.error_signal.emit(f"REAL analysis error: {str(e)}\n\n{traceback.format_exc()}")
 
 
 class MuraturaMainWindow(QMainWindow):
@@ -700,9 +687,14 @@ class MuraturaMainWindow(QMainWindow):
         QMessageBox.critical(self, "Analysis Error", f"Analysis failed:\n\n{error_msg}")
 
     def display_results(self, results):
-        """Display analysis results."""
+        """Display REAL analysis results."""
+        is_mock = results.get('mock', False)
+        mock_warning = "⚠️  MOCK DATA (for testing)" if is_mock else "✅ REAL FEM ANALYSIS"
+
         text = f"""
 MURATURA FEM v7.0 - Analysis Results
+{'='*60}
+{mock_warning}
 {'='*60}
 
 Analysis Type: {self.current_project.analysis_type}
@@ -710,6 +702,7 @@ Project: {self.current_project.name}
 
 Model Summary:
   - Walls: {results.get('n_walls', 0)}
+  - Materials: {results.get('n_materials', 0)}
   - Loads: {results.get('n_loads', 0)}
 
 Results:
@@ -718,33 +711,79 @@ Results:
 
 Verifications (NTC 2018):
 """
-        for verif in results.get('verifications', []):
-            status_icon = "✅" if verif['status'] == 'OK' else "❌"
-            text += f"  {status_icon} {verif['element']}: ratio = {verif['ratio']:.3f}\n"
+        verifications = results.get('verifications', [])
+        if verifications:
+            for verif in verifications:
+                status_icon = "✅" if verif['status'] == 'OK' else "❌"
+                text += f"  {status_icon} {verif['element']}: ratio = {verif['ratio']:.3f}\n"
+
+            summary = results.get('summary', {})
+            n_verified = summary.get('n_verified', 0)
+            n_total = summary.get('n_total', len(verifications))
+
+            text += f"\n  Total: {n_verified}/{n_total} elements verified\n"
+        else:
+            text += "  (No verification data available)\n"
 
         text += f"\n{'='*60}\n"
-        text += "Status: ALL VERIFICATIONS PASSED ✅" if results.get('success') else "Status: SOME VERIFICATIONS FAILED ❌"
+
+        if verifications:
+            all_passed = all(v['status'] == 'OK' for v in verifications)
+            status_msg = "Status: ALL VERIFICATIONS PASSED ✅" if all_passed else "Status: SOME VERIFICATIONS FAILED ❌"
+        else:
+            status_msg = "Status: Analysis completed"
+
+        text += status_msg
+
+        if not is_mock:
+            text += "\n\n🎉 This is REAL FEM analysis using MasonryFEMEngine!"
 
         self.results_text.setText(text)
 
     def update_plots(self):
-        """Update all plots with analysis results."""
+        """Update all plots with REAL analysis results (NO MOCK)."""
         try:
-            # Update pushover plot
-            if hasattr(self, 'pushover_plot'):
-                self.pushover_plot.plot_example_data()
+            if not self.current_project.results:
+                return
 
-            # Update modal plot
-            if hasattr(self, 'modal_plot'):
-                self.modal_plot.plot_example_modes()
+            results = self.current_project.results
 
-            # Update stress plot
+            # Import REAL FEM engine to get plot data
+            try:
+                from real_fem_integration import get_real_analysis_engine
+                real_engine = get_real_analysis_engine()
+            except:
+                print("Cannot access real analysis engine for plots")
+                return
+
+            # Update pushover plot with REAL data
+            if hasattr(self, 'pushover_plot') and results.get('pushover_data'):
+                disp, force = real_engine.get_pushover_curve_data()
+                if disp is not None and force is not None:
+                    self.pushover_plot.plot_pushover_curve(disp, force, "REAL Pushover Curve")
+                else:
+                    # Fallback if no curve data
+                    self.pushover_plot.plot_example_data()
+
+            # Update modal plot with REAL data
+            if hasattr(self, 'modal_plot') and results.get('modal_data'):
+                modes, freqs = real_engine.get_modal_data()
+                if modes and freqs:
+                    self.modal_plot.plot_modal_shapes(modes, freqs)
+                else:
+                    self.modal_plot.plot_example_modes()
+
+            # Update stress plot with REAL data
             if hasattr(self, 'stress_plot'):
-                self.stress_plot.plot_example_stresses()
+                labels, stresses = real_engine.get_stress_data()
+                if labels and stresses:
+                    self.stress_plot.plot_stress_distribution(labels, stresses, "REAL Stress Distribution")
+                else:
+                    self.stress_plot.plot_example_stresses()
 
-            # Update summary
-            if hasattr(self, 'summary_widget') and self.current_project.results:
-                verifs = self.current_project.results.get('verifications', [])
+            # Update summary with REAL verification data
+            if hasattr(self, 'summary_widget'):
+                verifs = results.get('verifications', [])
                 if verifs:
                     elements = [v['element'] for v in verifs]
                     ratios = [v['ratio'] for v in verifs]
@@ -752,7 +791,9 @@ Verifications (NTC 2018):
                     self.summary_widget.plot_verification_summary(elements, ratios, limits)
 
         except Exception as e:
+            import traceback
             print(f"Plot update error: {e}")
+            print(traceback.format_exc())
 
     # ========================================================================
     # IFC IMPORT/EXPORT
