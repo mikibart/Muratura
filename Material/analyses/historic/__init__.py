@@ -12,6 +12,7 @@ Moduli:
 - arches.py: Analisi archi metodo Heyman ✅ IMPLEMENTATO
 - vaults.py: Analisi volte (botte, crociera, cupole) ✅ IMPLEMENTATO
 - strengthening.py: Rinforzi FRP/FRCM (CNR-DT 200/215) ✅ IMPLEMENTATO
+- knowledge_levels.py: Knowledge Levels LC1/LC2/LC3 (NTC 2018) ✅ IMPLEMENTATO
 - towers.py: Analisi torri e pilastri snelli 🔄 TODO
 
 Per dettagli completi vedere:
@@ -47,6 +48,14 @@ from .strengthening import (
     MATERIAL_DATABASE
 )
 
+from .knowledge_levels import (
+    KnowledgeAssessment,
+    KnowledgeLevel,
+    InvestigationLevel,
+    MaterialProperties as KLMaterialProperties,
+    CONFIDENCE_FACTORS
+)
+
 __all__ = [
     # Arches
     'ArchAnalysis',
@@ -65,6 +74,12 @@ __all__ = [
     'MaterialType',
     'ApplicationType',
     'MATERIAL_DATABASE',
+    # Knowledge Levels
+    'KnowledgeAssessment',
+    'KnowledgeLevel',
+    'InvestigationLevel',
+    'KLMaterialProperties',
+    'CONFIDENCE_FACTORS',
     # Common
     'MASONRY_DENSITIES',
 ]
