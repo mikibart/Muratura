@@ -1806,26 +1806,96 @@ def create_equivalent_frame_geometry(wall: GeometryWall) -> Dict[str, Any]:
                 nodes.append({'id': node_id, 'x': x_right, 'y': y, 'restraint': 'free'})
                 node_id += 1
     
-    # Crea elementi maschio
+    # Crea elementi maschio con assegnazione nodi
     elem_id = 0
-    for pier in wall.piers:
-        elements.append({
-            'id': elem_id,
-            'type': 'pier',
-            'geometry': pier,
-            'nodes': []  # TODO: Assegnare basandosi su coordinate
-        })
-        elem_id += 1
-    
-    # Crea elementi fascia
-    for spandrel in wall.spandrels:
-        elements.append({
-            'id': elem_id,
-            'type': 'spandrel',
-            'geometry': spandrel,
-            'nodes': []  # TODO: Assegnare basandosi su coordinate
-        })
-        elem_id += 1
+
+    # Mappa nodi per coordinate (x,y) -> node_id
+    node_map = {(n['x'], n['y']): n['id'] for n in nodes}
+
+    # Ricostruisce le coordinate degli elementi dalla logica di identificazione
+    for floor in range(wall.n_floors):
+        openings = wall.openings_per_floor.get(floor, [])
+
+        # Ricostruisce i break points (come in identify_structural_elements)
+        breaks = [0.0, wall.length]
+        for opening in openings:
+            x_c_abs = opening.x_center + wall.length / 2.0
+            x_left = max(0.0, x_c_abs - opening.width/2.0)
+            x_right = min(wall.length, x_c_abs + opening.width/2.0)
+            breaks.extend([x_left, x_right])
+
+        breaks = sorted(set(breaks))
+
+        # Assegna nodi ai maschi corrispondenti
+        pier_index_in_floor = 0
+        for a, b in zip(breaks[:-1], breaks[1:]):
+            if (b - a) > 0.3:  # Minimo 30cm (stesso criterio di identify_structural_elements)
+                # Trova il pier corrispondente
+                matching_piers = [p for p in wall.piers
+                                 if hasattr(p, 'storey') and p.storey == floor
+                                 and abs(p.length - (b-a)) < 0.01]
+
+                if pier_index_in_floor < len(matching_piers):
+                    pier = matching_piers[pier_index_in_floor]
+
+                    # Centro del maschio in X
+                    x_center = (a + b) / 2.0
+                    y_bottom = floor * wall.floor_height
+                    y_top = (floor + 1) * wall.floor_height
+
+                    # Trova nodi più vicini alle coordinate
+                    bottom_node = min(node_map.items(),
+                                    key=lambda item: abs(item[0][0] - x_center) + abs(item[0][1] - y_bottom))
+                    top_node = min(node_map.items(),
+                                 key=lambda item: abs(item[0][0] - x_center) + abs(item[0][1] - y_top))
+
+                    elements.append({
+                        'id': elem_id,
+                        'type': 'pier',
+                        'geometry': pier,
+                        'nodes': [bottom_node[1], top_node[1]],  # [i_node, j_node]
+                        'x_center': x_center,
+                        'floor': floor
+                    })
+                    elem_id += 1
+                    pier_index_in_floor += 1
+
+    # Crea elementi fascia con assegnazione nodi
+    for floor in range(wall.n_floors):
+        openings = wall.openings_per_floor.get(floor, [])
+
+        for idx, opening in enumerate(openings):
+            if opening.type == "window":
+                # Coordinate apertura
+                x_c_abs = opening.x_center + wall.length / 2.0
+                x_left = x_c_abs - opening.width/2.0
+                x_right = x_c_abs + opening.width/2.0
+
+                # Altezza sopra apertura (livello superiore)
+                y_spandrel = floor * wall.floor_height + opening.y_bottom + opening.height
+
+                # Trova nodi ai bordi dell'apertura al livello della fascia
+                left_node = min(node_map.items(),
+                              key=lambda item: abs(item[0][0] - x_left) + abs(item[0][1] - y_spandrel))
+                right_node = min(node_map.items(),
+                               key=lambda item: abs(item[0][0] - x_right) + abs(item[0][1] - y_spandrel))
+
+                # Trova fascia corrispondente
+                matching_spandrels = [s for s in wall.spandrels
+                                     if abs(s.length - opening.width) < 0.01]
+
+                if idx < len(matching_spandrels):
+                    spandrel = matching_spandrels[idx]
+
+                    elements.append({
+                        'id': elem_id,
+                        'type': 'spandrel',
+                        'geometry': spandrel,
+                        'nodes': [left_node[1], right_node[1]],  # [i_node, j_node]
+                        'x_center': x_c_abs,
+                        'floor': floor
+                    })
+                    elem_id += 1
     
     return {
         'nodes': nodes,

@@ -963,8 +963,120 @@ def create_frame_from_wall_data(wall_data: Dict, material: MaterialProperties) -
                     node_id += 1
                     
     # Crea elementi
-    # TODO: Logica completa per identificare maschi e fasce considerando aperture
-    
+    # Identifica maschi murari (elementi verticali)
+    elem_id = 0
+    created_elements = []
+
+    # Ordina nodi per X poi Y per identificare elementi verticali
+    nodes_by_x = {}
+    for (x, y), nid in node_map.items():
+        if x not in nodes_by_x:
+            nodes_by_x[x] = []
+        nodes_by_x[x].append((y, nid))
+
+    # Per ogni colonna di nodi (stesso X), crea maschi verticali
+    for x, nodes_at_x in nodes_by_x.items():
+        nodes_at_x.sort()  # Ordina per Y crescente
+
+        # Crea maschio tra ogni coppia di nodi consecutivi
+        for i in range(len(nodes_at_x) - 1):
+            y_bot, nid_bot = nodes_at_x[i]
+            y_top, nid_top = nodes_at_x[i + 1]
+
+            pier_height = y_top - y_bot
+
+            # Determina larghezza maschio (stima basata su distanza tra colonne adiacenti)
+            x_coords = sorted(nodes_by_x.keys())
+            x_idx = x_coords.index(x)
+            if x_idx < len(x_coords) - 1:
+                pier_width = min(1.0, (x_coords[x_idx + 1] - x) * 0.3)  # 30% dell'interasse
+            else:
+                pier_width = 0.5  # Default
+            pier_width = max(0.3, pier_width)  # Minimo 30cm
+
+            # Crea geometria maschio
+            from ..geometry import GeometryPier
+            pier_geom = GeometryPier(
+                length=pier_width,
+                height=pier_height,
+                thickness=wall_data.get('thickness', 0.3),
+                h0=pier_height * 0.5
+            )
+
+            # Crea elemento
+            pier_elem = FrameElement(
+                element_id=elem_id,
+                i_node=nid_bot,
+                j_node=nid_top,
+                geometry=pier_geom,
+                material=material,
+                element_type='pier'
+            )
+            frame.add_element(pier_elem)
+            created_elements.append(('pier', elem_id, nid_bot, nid_top))
+            elem_id += 1
+
+    # Identifica fasce di piano (elementi orizzontali tra maschi allo stesso livello)
+    nodes_by_y = {}
+    for (x, y), nid in node_map.items():
+        y_round = round(y, 2)
+        if y_round not in nodes_by_y:
+            nodes_by_y[y_round] = []
+        nodes_by_y[y_round].append((x, nid))
+
+    # Per ogni livello (stesso Y), crea fasce tra nodi adiacenti
+    for y, nodes_at_y in nodes_by_y.items():
+        if y <= min(coord[1] for coord in node_map.keys()) + 0.01:
+            continue  # Skip livello base (non ci sono fasce)
+
+        nodes_at_y.sort()  # Ordina per X crescente
+
+        # Crea fascia tra ogni coppia di nodi consecutivi
+        for i in range(len(nodes_at_y) - 1):
+            x_left, nid_left = nodes_at_y[i]
+            x_right, nid_right = nodes_at_y[i + 1]
+
+            spandrel_length = x_right - x_left
+
+            # Altezza fascia tipicamente 30-50cm o 20% dell'interpiano
+            if floors:
+                floor_levels = sorted([f['level'] for f in floors])
+                # Trova interpiano
+                for idx, level in enumerate(floor_levels):
+                    if abs(y - level) < 0.1 and idx > 0:
+                        interpiano = floor_levels[idx] - floor_levels[idx - 1]
+                        spandrel_height = min(0.5, interpiano * 0.2)
+                        break
+                else:
+                    spandrel_height = 0.4
+            else:
+                spandrel_height = 0.4
+
+            # Crea geometria fascia
+            from ..geometry import GeometrySpandrel
+            spandrel_geom = GeometrySpandrel(
+                length=spandrel_length,
+                height=spandrel_height,
+                thickness=wall_data.get('thickness', 0.3)
+            )
+
+            # Crea elemento
+            spandrel_elem = FrameElement(
+                element_id=elem_id,
+                i_node=nid_left,
+                j_node=nid_right,
+                geometry=spandrel_geom,
+                material=material,
+                element_type='spandrel'
+            )
+            frame.add_element(spandrel_elem)
+            created_elements.append(('spandrel', elem_id, nid_left, nid_right))
+            elem_id += 1
+
+    logger.info(f"Frame creato: {len(frame.nodes)} nodi, {len(frame.elements)} elementi "
+                f"({sum(1 for e in created_elements if e[0]=='pier')} maschi, "
+                f"{sum(1 for e in created_elements if e[0]=='spandrel')} fasce)")
+
     # Aggiungi vincoli alla base
     y_min = min(coord[1] for coord in node_map.keys())
     for (x, y), nid in node_map.items():
