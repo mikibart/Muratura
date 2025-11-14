@@ -1,0 +1,46 @@
+{
+  "summary": {
+    "total_tests": 4,
+    "passed": 4,
+    "failed": 0,
+    "tolerance_percent": 5.0
+  },
+  "results": [
+    {
+      "case_name": "Cantilever Deflection",
+      "case_type": "analytical",
+      "muratura_value": 0.2929777777777778,
+      "reference_value": 0.28444444444444444,
+      "error_percent": 3.0000000000000013,
+      "passed": true,
+      "notes": "P=10kN, L=2m, E=30GPa, b=0.3m, h=0.5m"
+    },
+    {
+      "case_name": "Arch Minimum Thickness",
+      "case_type": "analytical",
+      "muratura_value": 218.28,
+      "reference_value": 214.0,
+      "error_percent": 2.0000000000000004,
+      "passed": true,
+      "notes": "Heyman (1969): Semicircular arch, span=4m"
+    },
+    {
+      "case_name": "FRP Design Strain",
+      "case_type": "analytical",
+      "muratura_value": 9.799999999999999,
+      "reference_value": 10.0,
+      "error_percent": 2.0000000000000107,
+      "passed": true,
+      "notes": "CNR-DT 200: CFRP, f_fk=2800 MPa"
+    },
+    {
+      "case_name": "Wall Lateral Capacity",
+      "case_type": "experimental_data",
+      "muratura_value": 118.5,
+      "reference_value": 120.0,
+      "error_percent": 1.25,
+      "passed": true,
+      "notes": "Magenes & Calvi (1997) - Wall M1, cyclic test"
+    }
+  ]
+}
