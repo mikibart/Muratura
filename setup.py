@@ -12,7 +12,7 @@ def read_file(filename):
         return f.read()
 
 # Version
-VERSION = '6.1.0'
+VERSION = '7.0.0-alpha'
 
 setup(
     name='muratura-fem',
@@ -30,6 +30,13 @@ setup(
     license='MIT',
     packages=find_packages(exclude=['tests', 'examples', 'docs']),
     include_package_data=True,
+    package_data={
+        'Material': [
+            'data/*.yaml',
+            'data/*.json',
+            'reports/templates/*.tex',
+        ],
+    },
     python_requires='>=3.8',
     install_requires=[
         'numpy>=1.24.0,<2.0.0',
@@ -51,6 +58,32 @@ setup(
             'sphinx>=6.0.0',
             'sphinx-rtd-theme>=1.2.0',
         ],
+        'bim': [
+            'ifcopenshell>=0.7.0',  # BIM/IFC import-export (Phase 3)
+        ],
+        'reports': [
+            'jinja2>=3.1.0',         # LaTeX template engine (Phase 3)
+            'python-docx>=1.1.0',    # Word document generation (Phase 3)
+            'openpyxl>=3.1.0',       # Excel export (optional)
+        ],
+        'all': [
+            # Development
+            'pytest>=7.4.0',
+            'pytest-cov>=4.1.0',
+            'black>=23.0.0',
+            'flake8>=6.0.0',
+            'mypy>=1.4.0',
+            'pylint>=2.17.0',
+            # Documentation
+            'sphinx>=6.0.0',
+            'sphinx-rtd-theme>=1.2.0',
+            # BIM Integration
+            'ifcopenshell>=0.7.0',
+            # Reports
+            'jinja2>=3.1.0',
+            'python-docx>=1.1.0',
+            'openpyxl>=3.1.0',
+        ],
     },
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -66,7 +99,9 @@ setup(
         'Programming Language :: Python :: 3.11',
         'Operating System :: OS Independent',
     ],
-    keywords='fem structural-engineering masonry ntc2018 eurocode8 pushover seismic',
+    keywords='fem structural-engineering masonry ntc2018 eurocode8 pushover seismic '
+             'bim ifc revit archicad historic-buildings heyman frp frcm strengthening '
+             'floors balconies stairs vaults arches knowledge-levels',
     entry_points={
         'console_scripts': [
             # Nessun CLI per ora, ma si può aggiungere

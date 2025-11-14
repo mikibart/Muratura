@@ -5,6 +5,105 @@ Tutte le modifiche rilevanti al progetto saranno documentate in questo file.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 e questo progetto segue [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.0-alpha] - 2025-01-14
+
+### 🎉 Major Release - BIM Integration Complete
+
+**ALL 3 PROJECT PHASES COMPLETED!**
+
+### Added - Phase 3: BIM Integration & Report Generation
+
+#### Module 1: IFC Import (~900 lines)
+- Import modelli BIM da Revit, ArchiCAD, Tekla (IFC 2x3/4)
+- Estrazione pareti (IfcWall), solai (IfcSlab), materiali
+- Material mapping automatico (masonry, concrete, steel, wood)
+- Unit conversion automatica (mm, ft, inch → m)
+- BREP → triangular mesh conversion
+- 13/16 test passing (3 skipped - require real IFC files) ✅
+
+#### Module 2: Report Generator (~980 lines)
+- Generazione automatica relazioni di calcolo **NTC 2018 §10.1**
+- Export: PDF (LaTeX), DOCX (Word), Markdown
+- 9 sezioni conformi normativa: premessa, materiali, azioni, verifiche
+- Template Jinja2 personalizzabili
+- Grafici matplotlib integrati
+- 17/18 test passing (1 skipped - requires LaTeX) ✅
+
+#### Module 3: Custom LaTeX Templates
+- `ntc2018_standard.tex` (~370 lines) - Edifici moderni
+- `ntc2018_historic.tex` (~390 lines) - Patrimonio culturale
+- Frontespizio, TOC, header/footer custom
+- Sezioni specializzate per edifici vincolati (D.Lgs. 42/2004)
+- Sistema fallback automatico
+
+#### Module 4: IFC Export (~700 lines)
+- Export risultati → IFC Structural Analysis View
+- IfcStructuralAnalysisModel generation
+- Nodi, membri, carichi, risultati come PropertySet
+- IFC 2x3 e IFC 4 support
+- Compatible: Tekla, SAP2000, IFC viewers
+- 21/21 test passing ✅
+
+#### Integration & Documentation
+- Example 14: IFC workflow completo (import → export)
+- Example 15: **Complete workflow integration Fase 1+2+3** ⭐
+- `docs/PROJECT_COMPLETE_SUMMARY.md` (~850 lines) - Mega documento finale
+- Case study: Palazzo storico Roma 1750 con consolidamento
+
+### Statistics - Phase 3
+- **Code**: ~2,700 lines (4 modules)
+- **Tests**: 51/55 passing (92.7%), 4 skipped
+- **Examples**: 4 complete workflows
+- **Total Project**: 44,874 LOC, 223 tests (98.2% passing)
+
+---
+
+## [6.4.3] - 2025-01-13
+
+### Added - Phase 2: Historic Buildings (Complete)
+
+#### Module 1: Arches - Heyman Limit Analysis (~720 lines)
+- 6 arch types: semicircular, segmental, pointed, elliptical, basket-handle, horseshoe
+- Thrust line calculation
+- Minimum thickness determination
+- Geometric safety factor: FS = t_actual / t_min
+- Heyman's three hypotheses implemented
+- 28/28 test passing ✅
+
+#### Module 2: Vaults - 3D Heyman Extension (~680 lines)
+- 5 vault types: barrel, cross, dome, cloister, sail
+- **Innovative**: Heyman method extended from 2D to 3D
+- Surface discretization into strips
+- 3D equilibrium analysis
+- 24/24 test passing ✅
+
+#### Module 3: FRP/FRCM Strengthening (~590 lines)
+- **CNR-DT 200 R1/2013** (FRP) implementation
+- **CNR-DT 215/2018** (FRCM) implementation
+- FRP types: CFRP, GFRP, AFRP
+- FRCM types: C-FRCM, G-FRCM, PBO-FRCM
+- Debonding verification, anchorage length
+- 20/20 test passing ✅
+
+#### Module 4: Knowledge Levels (~340 lines)
+- **NTC 2018 §C8.5.4** complete implementation
+- LC1/LC2/LC3 determination
+- Confidence Factor: FC = 1.35/1.20/1.00
+- Investigation requirements matrix
+- 12/12 test passing ✅
+
+### Documentation - Phase 2
+- `docs/PHASE_2_HISTORIC_PLAN.md` - Implementation plan
+- Examples 07-10: Arches, vaults, FRP, knowledge levels
+- README updated with Phase 2 features
+
+### Statistics - Phase 2
+- **Code**: ~3,000 lines (4 modules)
+- **Tests**: 84/84 passing (100%)
+- **Standards**: 3 (NTC Cap. 8, CNR-DT 200, CNR-DT 215, Linee Guida 2011)
+
+---
+
 ## [6.2.0] - 2025-11-14
 
 ### Added
