@@ -11,6 +11,7 @@ Target: Q2 2025
 Moduli:
 - arches.py: Analisi archi metodo Heyman ✅ IMPLEMENTATO
 - vaults.py: Analisi volte (botte, crociera, cupole) ✅ IMPLEMENTATO
+- strengthening.py: Rinforzi FRP/FRCM (CNR-DT 200/215) ✅ IMPLEMENTATO
 - towers.py: Analisi torri e pilastri snelli 🔄 TODO
 
 Per dettagli completi vedere:
@@ -37,6 +38,15 @@ from .vaults import (
     FailureMode as VaultFailureMode
 )
 
+from .strengthening import (
+    StrengtheningDesign,
+    FRPMaterial,
+    MasonryProperties,
+    MaterialType,
+    ApplicationType,
+    MATERIAL_DATABASE
+)
+
 __all__ = [
     # Arches
     'ArchAnalysis',
@@ -48,6 +58,13 @@ __all__ = [
     'VaultGeometry',
     'VaultType',
     'VaultFailureMode',
+    # Strengthening
+    'StrengtheningDesign',
+    'FRPMaterial',
+    'MasonryProperties',
+    'MaterialType',
+    'ApplicationType',
+    'MATERIAL_DATABASE',
     # Common
     'MASONRY_DENSITIES',
 ]
