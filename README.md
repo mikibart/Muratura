@@ -1,14 +1,15 @@
 # Muratura FEM - Sistema di Calcolo Strutturale
 
-![Version](https://img.shields.io/badge/version-6.4.3-blue.svg)
+![Version](https://img.shields.io/badge/version-7.0--alpha-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Phase1](https://img.shields.io/badge/Fase%201-Completata-success.svg)
 ![Phase2](https://img.shields.io/badge/Fase%202-Completata-success.svg)
+![Phase3](https://img.shields.io/badge/Fase%203-In%20Progress-yellow.svg)
 
 Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura conforme alle **Norme Tecniche per le Costruzioni NTC 2018** e **Eurocodice 8**.
 
-🎉 **NOVITÀ v6.4.3**: Moduli edifici storici COMPLETATI - Archi, Volte, Rinforzi FRP/FRCM, Knowledge Levels!
+🎉 **NOVITÀ v7.0-alpha**: BIM Integration + Report Generator - Import IFC e generazione automatica relazioni!
 
 ## 🎯 Caratteristiche Principali
 
@@ -30,6 +31,21 @@ Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura
 - ✅ **Rinforzi FRP/FRCM**: CFRP, GFRP, AFRP, C-FRCM - CNR-DT 200/215 compliant
 - ✅ **Knowledge Levels**: LC1/LC2/LC3 con fattori confidenza FC secondo NTC 2018 §8.5.4
 
+### 🔄 BIM & Report Generation (Fase 3 - v7.0) 🚧 IN PROGRESS
+- ✅ **IFC Import**: Import modelli BIM da Revit, ArchiCAD, Tekla (IFC 2x3/4)
+  - Estrazione geometria pareti, solai, materiali
+  - Material mapping automatico (masonry, concrete, steel, wood)
+  - Unit conversion (mm, ft → m)
+  - 13 test passing
+- ✅ **Report Generator**: Generazione automatica relazioni di calcolo NTC 2018
+  - Export PDF (via LaTeX), Word DOCX, Markdown
+  - Sezioni conformi §10.1: premessa, normativa, materiali, azioni, verifiche
+  - Grafici matplotlib integrati
+  - Template Jinja2 personalizzabili
+  - 17 test passing
+- 🔄 **IFC Export**: Export risultati → IFC structural (TODO)
+- 🔄 **Template Customization**: LaTeX templates personalizzabili (TODO)
+
 ### Conformità Normativa
 - ✅ **NTC 2018** completa + Circolare 2019 (incl. Cap. 8 Edifici Esistenti)
 - ✅ **Eurocodice 8** (EC8)
@@ -40,10 +56,17 @@ Sistema completo di analisi agli elementi finiti (FEM) per strutture in muratura
 
 ## 📋 Requisiti
 
+### Core Dependencies
 - Python 3.8 o superiore
 - NumPy >= 1.24.0
 - SciPy >= 1.10.0
 - Matplotlib >= 3.7.0
+
+### Fase 3 Dependencies (BIM & Reports)
+- ifcopenshell >= 0.7.0 (BIM/IFC import)
+- jinja2 >= 3.1.0 (Report templates)
+- python-docx >= 1.1.0 (Word generation)
+- LaTeX (pdflatex) - Optional, for PDF reports
 
 ## 🚀 Installazione
 
