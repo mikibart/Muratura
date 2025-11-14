@@ -2,6 +2,15 @@
 MURATURA FEM - Complete Workflow Integration Example
 Esempio completo integrazione Fase 1 + Fase 2 + Fase 3
 
+⚠️  IMPORTANT NOTE:
+This example demonstrates the COMPLETE workflow structure but uses
+SIMULATED OUTPUT for demonstration purposes. The workflow steps and
+API calls are REAL, but intermediate results are shown for didactic
+purposes without running full FEM analysis.
+
+For REAL FEM analysis with actual calculations, see examples 01-14
+which execute genuine structural analysis.
+
 Questo script dimostra il workflow completo del sistema MURATURA FEM v7.0
 integrando tutte le funzionalità implementate nelle 3 fasi:
 
