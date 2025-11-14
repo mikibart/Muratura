@@ -8,6 +8,7 @@
 ### Moduli Implementati
 - [x] `arches.py` - Analisi archi metodo Heyman (limite analysis) ✅
 - [x] `vaults.py` - Analisi volte (botte, crociera, cupole) ✅
+- [x] `strengthening.py` - Rinforzi FRP/FRCM (CNR-DT 200/215) ✅
 - [ ] `towers.py` - Analisi torri e pilastri snelli 🔄
 
 ### Metodologie
@@ -38,16 +39,18 @@
 ### Normativa
 - NTC 2018 Cap. 8 (Costruzioni esistenti)
 - Linee Guida Beni Culturali 2011
-- CNR-DT 212/2013 (Valutazione carichi vento costruzioni)
+- CNR-DT 200 R1/2013 (Rinforzi FRP)
+- CNR-DT 215/2018 (Rinforzi FRCM)
+- CNR-DT 212/2013 (Valutazione carichi vento)
 
 ## 🎯 Obiettivi Fase 2
 
 - [x] Pianificazione completa (✅ COMPLETATO)
 - [x] Implementazione modulo archi (✅ COMPLETATO)
 - [x] Implementazione modulo volte (✅ COMPLETATO)
-- [ ] Modulo rinforzi FRP/FRCM 🔄
+- [x] Modulo rinforzi FRP/FRCM (✅ COMPLETATO)
 - [ ] Sistema Knowledge Levels (LC1/LC2/LC3) 🔄
-- [x] Esempi edifici storici reali (✅ 8 esempi)
+- [x] Esempi edifici storici reali (✅ 13 esempi)
 - [ ] Validazione vs software commerciali 🔄
 
 ## 📊 Timeline
