@@ -14,6 +14,23 @@ pandas>=2.0.0,<3.0.0
 # Type checking support (Python < 3.10)
 typing-extensions>=4.5.0
 
+# ======================================================================
+# FASE 3: BIM Integration & Report Generation (v7.0)
+# ======================================================================
+
+# BIM / IFC Support
+ifcopenshell>=0.7.0  # IFC parser (Building Information Modeling)
+
+# Report Generation
+jinja2>=3.1.0  # Template engine per LaTeX/HTML reports
+python-docx>=1.1.0  # Generazione documenti Word
+openpyxl>=3.1.0  # Excel export (opzionale)
+
+# Note: LaTeX (pdflatex) deve essere installato separatamente sul sistema
+# Per Ubuntu/Debian: sudo apt-get install texlive-latex-base texlive-latex-extra
+# Per Windows: MiKTeX o TeXLive
+# Per macOS: MacTeX
+
 # Development dependencies (commentate per produzione, decommentare per dev)
 # pytest>=7.4.0
 # pytest-cov>=4.1.0
