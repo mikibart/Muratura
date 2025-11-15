@@ -33,6 +33,19 @@ try:
 except ImportError:
     OPENPYXL_AVAILABLE = False
 
+# Reportlab imports (opzionali)
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.pdfgen import canvas
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+
 
 class Command:
     """Classe base per comandi Undo/Redo"""
@@ -653,6 +666,194 @@ class CoordinateModel:
         wb.close()
         return imported
 
+    def generate_pdf_report(self, filename):
+        """Genera report PDF completo con coordinate e statistiche"""
+        if not REPORTLAB_AVAILABLE:
+            raise ImportError("reportlab non disponibile. Installare con: pip install reportlab")
+
+        # Crea documento PDF
+        doc = SimpleDocTemplate(filename, pagesize=A4,
+                               leftMargin=2*cm, rightMargin=2*cm,
+                               topMargin=2*cm, bottomMargin=2*cm)
+
+        story = []
+        styles = getSampleStyleSheet()
+
+        # Stile custom per titolo
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#003366'),
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+
+        # Stile custom per sottotitolo
+        subtitle_style = ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Heading2'],
+            fontSize=14,
+            textColor=colors.HexColor('#366092'),
+            spaceAfter=12
+        )
+
+        # === PAGINA 1: FRONTESPIZIO ===
+
+        # Titolo
+        story.append(Spacer(1, 3*cm))
+        story.append(Paragraph("REPORT COORDINATE FILI FISSI", title_style))
+        story.append(Spacer(1, 1*cm))
+
+        # Informazioni progetto
+        project_name = self.metadata.get('project_name', 'Non specificato')
+        location = self.metadata.get('location', 'Non specificato')
+        author = self.metadata.get('author', 'N/A')
+        registration = self.metadata.get('registration', 'N/A')
+
+        story.append(Paragraph(f"<b>Progetto:</b> {project_name}", styles['Normal']))
+        story.append(Spacer(1, 0.5*cm))
+        story.append(Paragraph(f"<b>Località:</b> {location}", styles['Normal']))
+        story.append(Spacer(1, 0.5*cm))
+        story.append(Paragraph(f"<b>Architetto:</b> {author}", styles['Normal']))
+        story.append(Spacer(1, 0.3*cm))
+        story.append(Paragraph(f"<b>Registrazione:</b> {registration}", styles['Normal']))
+        story.append(Spacer(1, 1*cm))
+
+        # Data creazione e modifica
+        created = self.metadata.get('created', 'N/A')[:19]
+        modified = self.metadata.get('modified', 'N/A')[:19]
+        story.append(Paragraph(f"<b>Creato:</b> {created}", styles['Normal']))
+        story.append(Spacer(1, 0.3*cm))
+        story.append(Paragraph(f"<b>Modificato:</b> {modified}", styles['Normal']))
+        story.append(Spacer(1, 0.3*cm))
+        story.append(Paragraph(f"<b>Generato:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+
+        # Note
+        notes = self.metadata.get('notes', '')
+        if notes:
+            story.append(Spacer(1, 1*cm))
+            story.append(Paragraph("<b>Note:</b>", styles['Normal']))
+            story.append(Spacer(1, 0.3*cm))
+            story.append(Paragraph(notes, styles['Normal']))
+
+        story.append(PageBreak())
+
+        # === PAGINA 2: STATISTICHE ===
+
+        story.append(Paragraph("STATISTICHE COORDINATE", subtitle_style))
+        story.append(Spacer(1, 0.5*cm))
+
+        # Tabella statistiche
+        stats_data = [
+            ["Descrizione", "Valore"],
+            ["Totale punti coordinati", str(len(self.points))]
+        ]
+
+        if self.points:
+            bounds = self.get_bounds()
+            x_range = bounds['x_max'] - bounds['x_min']
+            y_range = bounds['y_max'] - bounds['y_min']
+            z_range = bounds['z_max'] - bounds['z_min']
+
+            stats_data.extend([
+                ["", ""],
+                ["ESTENSIONE X", ""],
+                [f"  X minima", f"{bounds['x_min']:.4f} m"],
+                [f"  X massima", f"{bounds['x_max']:.4f} m"],
+                [f"  Range X", f"{x_range:.4f} m"],
+                ["", ""],
+                ["ESTENSIONE Y", ""],
+                [f"  Y minima", f"{bounds['y_min']:.4f} m"],
+                [f"  Y massima", f"{bounds['y_max']:.4f} m"],
+                [f"  Range Y", f"{y_range:.4f} m"],
+                ["", ""],
+                ["ESTENSIONE Z", ""],
+                [f"  Z minima", f"{bounds['z_min']:.3f} m"],
+                [f"  Z massima", f"{bounds['z_max']:.3f} m"],
+                [f"  Range Z", f"{z_range:.3f} m"],
+            ])
+
+        stats_table = Table(stats_data, colWidths=[10*cm, 6*cm])
+        stats_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+        ]))
+
+        story.append(stats_table)
+        story.append(Spacer(1, 1*cm))
+
+        # Livelli
+        levels = self.get_levels()
+        if levels:
+            story.append(Paragraph("LIVELLI DEFINITI", subtitle_style))
+            story.append(Spacer(1, 0.5*cm))
+
+            levels_data = [["Livello", "Numero Punti"]]
+            for level in levels:
+                count = len(self.get_points_by_level(level))
+                levels_data.append([level, str(count)])
+
+            levels_table = Table(levels_data, colWidths=[10*cm, 6*cm])
+            levels_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ]))
+
+            story.append(levels_table)
+
+        story.append(PageBreak())
+
+        # === PAGINA 3+: TABELLA COORDINATE ===
+
+        story.append(Paragraph("ELENCO COORDINATE FILI FISSI", subtitle_style))
+        story.append(Spacer(1, 0.5*cm))
+
+        # Tabella coordinate
+        coord_data = [["ID", "X (m)", "Y (m)", "Z (m)", "Livello", "Descrizione"]]
+
+        for point in self.get_point_list():
+            coord_data.append([
+                str(point.id),
+                f"{point.x:.4f}",
+                f"{point.y:.4f}",
+                f"{point.z:.3f}",
+                point.level,
+                point.description[:30]  # Limita lunghezza
+            ])
+
+        # Larghezze colonne
+        col_widths = [1.5*cm, 2.5*cm, 2.5*cm, 2*cm, 2*cm, 6*cm]
+
+        coord_table = Table(coord_data, colWidths=col_widths, repeatRows=1)
+        coord_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')]),
+        ]))
+
+        story.append(coord_table)
+
+        # Genera PDF
+        doc.build(story)
+
 
 class MetadataDialog(QDialog):
     """Dialog per modifica metadata progetto"""
@@ -1190,6 +1391,8 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction('Esporta DXF...', self.export_dxf)
         file_menu.addSeparator()
+        file_menu.addAction('Genera Report PDF...', self.generate_pdf_report_ui, 'Ctrl+P')
+        file_menu.addSeparator()
         file_menu.addAction('Informazioni Progetto...', self.edit_metadata, 'Ctrl+I')
         file_menu.addSeparator()
         file_menu.addAction('Esci', self.close, 'Ctrl+Q')
@@ -1519,6 +1722,47 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Errore Esportazione",
                                    f"Impossibile esportare DXF:\n{e}")
+
+    def generate_pdf_report_ui(self):
+        """Genera report PDF completo"""
+        if not REPORTLAB_AVAILABLE:
+            reply = QMessageBox.question(
+                self, "Reportlab Non Disponibile",
+                "La libreria reportlab non è installata.\n\nVuoi installare reportlab ora?\n\nEsegui: pip install reportlab",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                QMessageBox.information(self, "Installazione",
+                                      "Apri un terminale ed esegui:\n\npip install reportlab\n\nPoi riavvia l'applicazione.")
+            return
+
+        if not self.model.points:
+            QMessageBox.warning(self, "Attenzione", "Nessuna coordinata da esportare")
+            return
+
+        # Verifica che ci siano metadati minimi
+        if not self.model.metadata.get('project_name'):
+            reply = QMessageBox.question(
+                self, "Informazioni Progetto Mancanti",
+                "Nessun nome progetto specificato.\n\nVuoi inserire le informazioni del progetto prima di generare il report?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.edit_metadata()
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Genera Report PDF", "report_coordinate_fili_fissi.pdf",
+            "File PDF (*.pdf);;Tutti i file (*)"
+        )
+
+        if filename:
+            try:
+                self.model.generate_pdf_report(filename)
+                QMessageBox.information(self, "Report Generato",
+                                      f"Report PDF generato con successo:\n{filename}\n\nIl report contiene:\n• Frontespizio con info progetto\n• Statistiche coordinate\n• Livelli definiti\n• Tabella completa coordinate")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore Generazione Report",
+                                   f"Impossibile generare report PDF:\n{e}")
 
     def edit_metadata(self):
         """Modifica metadata progetto"""
@@ -2129,6 +2373,7 @@ Y centro: {sum(y_coords)/len(y_coords):.4f} m
         """Informazioni sull'applicazione"""
         matplotlib_status = "✓ Disponibile" if MATPLOTLIB_AVAILABLE else "✗ Non installato"
         openpyxl_status = "✓ Disponibile" if OPENPYXL_AVAILABLE else "✗ Non installato"
+        reportlab_status = "✓ Disponibile" if REPORTLAB_AVAILABLE else "✗ Non installato"
 
         about_text = f"""INPUT COORDINATE FILI FISSI
 
@@ -2181,11 +2426,19 @@ Export Excel:
 • Foglio Info Progetto con metadata
 • Foglio Statistiche automatiche
 
+Report PDF (Ctrl+P):
+• Frontespizio con informazioni progetto
+• Statistiche estensioni coordinate
+• Tabella livelli definiti
+• Elenco completo coordinate con formattazione
+• Layout professionale A4 pronto per stampa
+
 Librerie Opzionali:
 Matplotlib: {matplotlib_status}
 Openpyxl: {openpyxl_status}
+Reportlab: {"✓ Disponibile" if REPORTLAB_AVAILABLE else "✗ Non installato"}
 
-Versione: 5.1 - Undo/Redo System
+Versione: 5.2 - PDF Report Generation
 """
         QMessageBox.about(self, "Informazioni", about_text)
 
@@ -2193,7 +2446,7 @@ Versione: 5.1 - Undo/Redo System
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Input Coordinate Fili Fissi")
-    app.setApplicationVersion("5.1")
+    app.setApplicationVersion("5.2")
     
     # Stile applicazione
     app.setStyleSheet("""
