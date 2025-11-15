@@ -34,6 +34,116 @@ except ImportError:
     OPENPYXL_AVAILABLE = False
 
 
+class Command:
+    """Classe base per comandi Undo/Redo"""
+    def execute(self, model):
+        """Esegue il comando"""
+        raise NotImplementedError
+
+    def undo(self, model):
+        """Annulla il comando"""
+        raise NotImplementedError
+
+
+class AddPointCommand(Command):
+    """Comando per aggiungere un punto"""
+    def __init__(self, x, y, z, description, level):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.description = description
+        self.level = level
+        self.point_id = None
+
+    def execute(self, model):
+        self.point_id = model._add_point_internal(self.x, self.y, self.z, self.description, self.level)
+        return self.point_id
+
+    def undo(self, model):
+        if self.point_id:
+            model._delete_point_internal(self.point_id)
+
+
+class DeletePointCommand(Command):
+    """Comando per eliminare un punto"""
+    def __init__(self, point_id):
+        self.point_id = point_id
+        self.saved_point = None
+
+    def execute(self, model):
+        if self.point_id in model.points:
+            # Salva punto per undo
+            p = model.points[self.point_id]
+            self.saved_point = (p.id, p.x, p.y, p.z, p.description, p.level)
+            model._delete_point_internal(self.point_id)
+            return True
+        return False
+
+    def undo(self, model):
+        if self.saved_point:
+            pid, x, y, z, desc, level = self.saved_point
+            # Ripristina con ID originale
+            model._restore_point_internal(pid, x, y, z, desc, level)
+
+
+class UpdatePointCommand(Command):
+    """Comando per aggiornare un punto"""
+    def __init__(self, point_id, **kwargs):
+        self.point_id = point_id
+        self.new_values = kwargs
+        self.old_values = {}
+
+    def execute(self, model):
+        if self.point_id in model.points:
+            point = model.points[self.point_id]
+            # Salva valori vecchi
+            for key in self.new_values.keys():
+                if hasattr(point, key):
+                    self.old_values[key] = getattr(point, key)
+            # Applica nuovi valori
+            model._update_point_internal(self.point_id, **self.new_values)
+            return True
+        return False
+
+    def undo(self, model):
+        if self.old_values:
+            model._update_point_internal(self.point_id, **self.old_values)
+
+
+class TranslateAllCommand(Command):
+    """Comando per traslare tutti i punti"""
+    def __init__(self, dx, dy, dz):
+        self.dx = dx
+        self.dy = dy
+        self.dz = dz
+
+    def execute(self, model):
+        model._translate_all_internal(self.dx, self.dy, self.dz)
+
+    def undo(self, model):
+        model._translate_all_internal(-self.dx, -self.dy, -self.dz)
+
+
+class ClearAllCommand(Command):
+    """Comando per pulire tutti i punti"""
+    def __init__(self):
+        self.saved_points = []
+        self.saved_next_id = 1
+
+    def execute(self, model):
+        # Salva tutti i punti
+        self.saved_points = [(p.id, p.x, p.y, p.z, p.description, p.level)
+                            for p in model.points.values()]
+        self.saved_next_id = model.next_id
+        model._clear_internal()
+
+    def undo(self, model):
+        # Ripristina tutti i punti
+        for pid, x, y, z, desc, level in self.saved_points:
+            model._restore_point_internal(pid, x, y, z, desc, level)
+        model.next_id = self.saved_next_id
+
+
 class Point:
     """Punto con coordinate spaziali"""
 
@@ -69,7 +179,7 @@ class Point:
 
 class CoordinateModel:
     """Modello dati per coordinate fili fissi"""
-    
+
     def __init__(self):
         self.points = {}
         self.next_id = 1
@@ -83,35 +193,126 @@ class CoordinateModel:
             "location": "",
             "notes": ""
         }
+        # Undo/Redo system
+        self.undo_stack = []
+        self.redo_stack = []
+        self.max_undo_levels = 50  # Limita memoria
     
-    def add_point(self, x, y, z=0.0, description="", level=""):
-        """Aggiunge un punto"""
+    # === Metodi interni (usati dai comandi) ===
+
+    def _add_point_internal(self, x, y, z=0.0, description="", level=""):
+        """Metodo interno per aggiungere punto (usato da Command)"""
         if not description:
             description = f"Punto {self.next_id}"
-
         point = Point(self.next_id, x, y, z, description, level)
         self.points[self.next_id] = point
+        point_id = self.next_id
         self.next_id += 1
         self._mark_modified()
-        return point.id
-    
-    def update_point(self, point_id, **kwargs):
-        """Aggiorna un punto"""
+        return point_id
+
+    def _delete_point_internal(self, point_id):
+        """Metodo interno per eliminare punto (usato da Command)"""
+        if point_id in self.points:
+            del self.points[point_id]
+            self._mark_modified()
+
+    def _update_point_internal(self, point_id, **kwargs):
+        """Metodo interno per aggiornare punto (usato da Command)"""
         if point_id in self.points:
             point = self.points[point_id]
             for key, value in kwargs.items():
                 if hasattr(point, key):
                     setattr(point, key, value)
             self._mark_modified()
-            return True
-        return False
+
+    def _restore_point_internal(self, point_id, x, y, z, description, level):
+        """Metodo interno per ripristinare punto con ID specifico"""
+        point = Point(point_id, x, y, z, description, level)
+        self.points[point_id] = point
+        if point_id >= self.next_id:
+            self.next_id = point_id + 1
+        self._mark_modified()
+
+    def _translate_all_internal(self, dx, dy, dz):
+        """Metodo interno per traslare tutti i punti"""
+        for point in self.points.values():
+            point.x += dx
+            point.y += dy
+            point.z += dz
+        self._mark_modified()
+
+    def _clear_internal(self):
+        """Metodo interno per pulire tutti i punti"""
+        self.points.clear()
+        self.next_id = 1
+        self._mark_modified()
+
+    # === Sistema Undo/Redo ===
+
+    def execute_command(self, command):
+        """Esegue un comando e lo aggiunge allo stack undo"""
+        result = command.execute(self)
+        self.undo_stack.append(command)
+        # Limita dimensione stack
+        if len(self.undo_stack) > self.max_undo_levels:
+            self.undo_stack.pop(0)
+        # Pulisce redo stack quando si esegue nuovo comando
+        self.redo_stack.clear()
+        return result
+
+    def undo(self):
+        """Annulla l'ultima operazione"""
+        if not self.undo_stack:
+            return False
+        command = self.undo_stack.pop()
+        command.undo(self)
+        self.redo_stack.append(command)
+        self._mark_modified()
+        return True
+
+    def redo(self):
+        """Ripristina l'ultima operazione annullata"""
+        if not self.redo_stack:
+            return False
+        command = self.redo_stack.pop()
+        command.execute(self)
+        self.undo_stack.append(command)
+        self._mark_modified()
+        return True
+
+    def can_undo(self):
+        """Verifica se è possibile annullare"""
+        return len(self.undo_stack) > 0
+
+    def can_redo(self):
+        """Verifica se è possibile ripristinare"""
+        return len(self.redo_stack) > 0
+
+    def clear_undo_history(self):
+        """Pulisce la cronologia undo/redo"""
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+
+    # === Metodi pubblici (wrapper con comandi) ===
+
+    def add_point(self, x, y, z=0.0, description="", level=""):
+        """Aggiunge un punto (con undo support)"""
+        cmd = AddPointCommand(x, y, z, description, level)
+        return self.execute_command(cmd)
     
-    def delete_point(self, point_id):
-        """Elimina un punto"""
+    def update_point(self, point_id, **kwargs):
+        """Aggiorna un punto (con undo support)"""
         if point_id in self.points:
-            del self.points[point_id]
-            self._mark_modified()
-            return True
+            cmd = UpdatePointCommand(point_id, **kwargs)
+            return self.execute_command(cmd)
+        return False
+
+    def delete_point(self, point_id):
+        """Elimina un punto (con undo support)"""
+        if point_id in self.points:
+            cmd = DeletePointCommand(point_id)
+            return self.execute_command(cmd)
         return False
     
     def get_point_list(self):
@@ -119,10 +320,9 @@ class CoordinateModel:
         return sorted(self.points.values(), key=lambda p: p.id)
     
     def clear(self):
-        """Pulisce tutti i punti"""
-        self.points.clear()
-        self.next_id = 1
-        self._mark_modified()
+        """Pulisce tutti i punti (con undo support)"""
+        cmd = ClearAllCommand()
+        self.execute_command(cmd)
     
     def get_bounds(self):
         """Calcola i limiti delle coordinate"""
@@ -153,12 +353,9 @@ class CoordinateModel:
         return None
 
     def translate_all(self, dx, dy, dz):
-        """Trasla tutti i punti di dx, dy, dz"""
-        for point in self.points.values():
-            point.x += dx
-            point.y += dy
-            point.z += dz
-        self._mark_modified()
+        """Trasla tutti i punti di dx, dy, dz (con undo support)"""
+        cmd = TranslateAllCommand(dx, dy, dz)
+        self.execute_command(cmd)
 
     def find_duplicates(self, tolerance=0.001):
         """Trova punti duplicati entro una tolleranza"""
@@ -999,6 +1196,9 @@ class MainWindow(QMainWindow):
 
         # Menu Modifica
         edit_menu = menubar.addMenu('Modifica')
+        self.undo_action = edit_menu.addAction('Annulla', self.undo_last_action, 'Ctrl+Z')
+        self.redo_action = edit_menu.addAction('Ripristina', self.redo_last_action, 'Ctrl+Y')
+        edit_menu.addSeparator()
         edit_menu.addAction('Duplica Punto Selezionato', self.duplicate_selected_point, 'Ctrl+D')
         edit_menu.addAction('Trasla Tutte le Coordinate...', self.translate_coordinates)
         edit_menu.addSeparator()
@@ -1074,6 +1274,38 @@ class MainWindow(QMainWindow):
         else:
             self.bounds_label.setText("")
 
+        # Aggiorna stato Undo/Redo
+        self.update_undo_redo_actions()
+
+    def update_undo_redo_actions(self):
+        """Aggiorna abilitazione azioni Undo/Redo"""
+        self.undo_action.setEnabled(self.model.can_undo())
+        self.redo_action.setEnabled(self.model.can_redo())
+
+        # Aggiorna testo con numero operazioni
+        undo_count = len(self.model.undo_stack)
+        redo_count = len(self.model.redo_stack)
+        self.undo_action.setText(f"Annulla ({undo_count})" if undo_count > 0 else "Annulla")
+        self.redo_action.setText(f"Ripristina ({redo_count})" if redo_count > 0 else "Ripristina")
+
+    def undo_last_action(self):
+        """Annulla l'ultima azione"""
+        if self.model.undo():
+            self.refresh_display()
+            QMessageBox.information(self, "Annulla",
+                                  f"Operazione annullata. Rimaste {len(self.model.undo_stack)} operazioni.")
+        else:
+            QMessageBox.information(self, "Annulla", "Nessuna operazione da annullare")
+
+    def redo_last_action(self):
+        """Ripristina l'ultima azione annullata"""
+        if self.model.redo():
+            self.refresh_display()
+            QMessageBox.information(self, "Ripristina",
+                                  f"Operazione ripristinata. Disponibili {len(self.model.redo_stack)} ripristini.")
+        else:
+            QMessageBox.information(self, "Ripristina", "Nessuna operazione da ripristinare")
+
     def on_level_filter_changed(self, level):
         """Gestisce cambio filtro livello"""
         self.table.refresh(level if level != "Tutti" else None)
@@ -1117,20 +1349,21 @@ class MainWindow(QMainWindow):
     def open_file(self):
         """Apri file coordinate esistente"""
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Apri Coordinate", "", 
+            self, "Apri Coordinate", "",
             "File JSON (*.json);;Tutti i file (*)"
         )
-        
+
         if filename:
             try:
                 with open(filename, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 self.model.from_dict(data)
+                self.model.clear_undo_history()  # Pulisce cronologia quando carica file
                 self.refresh_display()
-                QMessageBox.information(self, "Caricamento Completato", 
+                QMessageBox.information(self, "Caricamento Completato",
                                       f"Coordinate caricate da:\n{filename}")
             except Exception as e:
-                QMessageBox.critical(self, "Errore Caricamento", 
+                QMessageBox.critical(self, "Errore Caricamento",
                                    f"Impossibile aprire il file:\n{e}")
     
     def import_csv(self):
@@ -1912,6 +2145,7 @@ Funzionalità Base:
 • Import/Export: JSON, CSV, Excel (.xlsx), DXF
 • Calcolo distanze tra punti (2D/3D)
 • Rilevamento punti duplicati
+• Undo/Redo completo (Ctrl+Z / Ctrl+Y) con 50 livelli
 
 Gestione Livelli/Piani:
 • Assegnazione livelli a punti
@@ -1951,7 +2185,7 @@ Librerie Opzionali:
 Matplotlib: {matplotlib_status}
 Openpyxl: {openpyxl_status}
 
-Versione: 5.0 - Excel Integration
+Versione: 5.1 - Undo/Redo System
 """
         QMessageBox.about(self, "Informazioni", about_text)
 
@@ -1959,7 +2193,7 @@ Versione: 5.0 - Excel Integration
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Input Coordinate Fili Fissi")
-    app.setApplicationVersion("5.0")
+    app.setApplicationVersion("5.1")
     
     # Stile applicazione
     app.setStyleSheet("""
