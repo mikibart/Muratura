@@ -2220,7 +2220,7 @@ class UnifiedMainWindow(QMainWindow):
                             continue
 
                         node = Node(
-                            id=node_id if node_id is not None else self.model.next_node_id,
+                            node_id=node_id if node_id is not None else self.model.next_node_id,
                             x=x, y=y, z=z,
                             level=level,
                             description=description
@@ -2317,7 +2317,7 @@ class UnifiedMainWindow(QMainWindow):
                         continue
 
                     node = Node(
-                        id=node_id if node_id is not None else self.model.next_node_id,
+                        node_id=node_id if node_id is not None else self.model.next_node_id,
                         x=x, y=y, z=z,
                         level=level,
                         description=description
@@ -2378,7 +2378,7 @@ class UnifiedMainWindow(QMainWindow):
                         description = "DXF Point"
 
                         node = Node(
-                            id=self.model.next_node_id,
+                            node_id=self.model.next_node_id,
                             x=x, y=y, z=z,
                             level=level,
                             description=description
@@ -2408,7 +2408,7 @@ class UnifiedMainWindow(QMainWindow):
 
                         if not point_exists:
                             node = Node(
-                                id=self.model.next_node_id,
+                                node_id=self.model.next_node_id,
                                 x=x, y=y, z=z,
                                 level=level,
                                 description=text_content
@@ -2425,7 +2425,7 @@ class UnifiedMainWindow(QMainWindow):
                         level = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
 
                         node = Node(
-                            id=self.model.next_node_id,
+                            node_id=self.model.next_node_id,
                             x=x, y=y, z=z,
                             level=level,
                             description=f"Block: {block_name}"
@@ -2501,7 +2501,7 @@ class UnifiedMainWindow(QMainWindow):
                     j += 2
 
                 node = Node(
-                    id=self.model.next_node_id,
+                    node_id=self.model.next_node_id,
                     x=x, y=y, z=z,
                     level=layer,
                     description="DXF Point"
@@ -2545,7 +2545,7 @@ class UnifiedMainWindow(QMainWindow):
 
                 if text_content:
                     node = Node(
-                        id=self.model.next_node_id,
+                        node_id=self.model.next_node_id,
                         x=x, y=y, z=z,
                         level=layer,
                         description=text_content
