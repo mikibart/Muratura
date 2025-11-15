@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QLabel, QDoubleSpinBox, QLineEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QGroupBox, QGridLayout, QFileDialog, QMessageBox,
     QHeaderView, QAbstractItemView, QDialog, QTextEdit, QDialogButtonBox,
-    QInputDialog
+    QInputDialog, QComboBox, QSpinBox, QCheckBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -16,31 +16,34 @@ from PyQt5.QtGui import QFont
 
 class Point:
     """Punto con coordinate spaziali"""
-    
-    def __init__(self, point_id, x, y, z=0.0, description=""):
+
+    def __init__(self, point_id, x, y, z=0.0, description="", level=""):
         self.id = point_id
         self.x = x
         self.y = y
         self.z = z
         self.description = description
-        
+        self.level = level  # Livello/Piano (es: "PT", "P1", "P2")
+
     def to_dict(self):
         return {
             'id': self.id,
             'x': self.x,
             'y': self.y,
             'z': self.z,
-            'description': self.description
+            'description': self.description,
+            'level': self.level
         }
-    
+
     @classmethod
     def from_dict(cls, data):
         return cls(
-            data['id'], 
-            data['x'], 
-            data['y'], 
+            data['id'],
+            data['x'],
+            data['y'],
             data.get('z', 0.0),
-            data.get('description', '')
+            data.get('description', ''),
+            data.get('level', '')
         )
 
 
@@ -61,12 +64,12 @@ class CoordinateModel:
             "notes": ""
         }
     
-    def add_point(self, x, y, z=0.0, description=""):
+    def add_point(self, x, y, z=0.0, description="", level=""):
         """Aggiunge un punto"""
         if not description:
             description = f"Punto {self.next_id}"
-            
-        point = Point(self.next_id, x, y, z, description)
+
+        point = Point(self.next_id, x, y, z, description, level)
         self.points[self.next_id] = point
         self.next_id += 1
         self._mark_modified()
@@ -168,6 +171,106 @@ class CoordinateModel:
                 'dz': dz
             }
         return None
+
+    def get_levels(self):
+        """Restituisce lista livelli unici ordinati"""
+        levels = set(p.level for p in self.points.values() if p.level)
+        return sorted(levels)
+
+    def get_points_by_level(self, level):
+        """Restituisce punti di un livello specifico"""
+        return [p for p in self.points.values() if p.level == level]
+
+    def copy_level(self, source_level, target_level, offset_z=0.0):
+        """Copia tutti i punti di un livello su un altro livello"""
+        source_points = self.get_points_by_level(source_level)
+        copied = 0
+        for p in source_points:
+            self.add_point(p.x, p.y, p.z + offset_z, p.description, target_level)
+            copied += 1
+        return copied
+
+    def assign_level_to_points(self, point_ids, level):
+        """Assegna livello a lista di punti"""
+        for pid in point_ids:
+            if pid in self.points:
+                self.points[pid].level = level
+        self._mark_modified()
+
+    def select_points_by_area(self, x_min, x_max, y_min, y_max):
+        """Seleziona punti in area rettangolare"""
+        selected = []
+        for p in self.points.values():
+            if x_min <= p.x <= x_max and y_min <= p.y <= y_max:
+                selected.append(p.id)
+        return selected
+
+    def select_points_by_z(self, z_value, tolerance=0.001):
+        """Seleziona punti a quota Z (con tolleranza)"""
+        selected = []
+        for p in self.points.values():
+            if abs(p.z - z_value) < tolerance:
+                selected.append(p.id)
+        return selected
+
+    def translate_points(self, point_ids, dx, dy, dz):
+        """Trasla solo punti selezionati"""
+        for pid in point_ids:
+            if pid in self.points:
+                self.points[pid].x += dx
+                self.points[pid].y += dy
+                self.points[pid].z += dz
+        self._mark_modified()
+
+    def delete_points(self, point_ids):
+        """Elimina lista di punti"""
+        for pid in point_ids:
+            if pid in self.points:
+                del self.points[pid]
+        self._mark_modified()
+
+    def mirror_points(self, point_ids, axis='x', value=0.0):
+        """Specchia punti rispetto ad asse"""
+        for pid in point_ids:
+            if pid in self.points:
+                p = self.points[pid]
+                if axis == 'x':
+                    p.y = 2 * value - p.y
+                elif axis == 'y':
+                    p.x = 2 * value - p.x
+                elif axis == 'z':
+                    p.z = 2 * value - p.z
+        self._mark_modified()
+
+    def snap_to_grid(self, point_ids, grid_size=0.5):
+        """Arrotonda coordinate a griglia"""
+        for pid in point_ids:
+            if pid in self.points:
+                p = self.points[pid]
+                p.x = round(p.x / grid_size) * grid_size
+                p.y = round(p.y / grid_size) * grid_size
+                p.z = round(p.z / grid_size) * grid_size
+        self._mark_modified()
+
+    def generate_grid(self, x_start, x_end, x_count, y_start, y_end, y_count, z, level="", prefix=""):
+        """Genera griglia regolare di punti"""
+        generated = 0
+        x_coords = [x_start + i * (x_end - x_start) / (x_count - 1) for i in range(x_count)] if x_count > 1 else [x_start]
+        y_coords = [y_start + i * (y_end - y_start) / (y_count - 1) for i in range(y_count)] if y_count > 1 else [y_start]
+
+        # Lettere per assi X: A, B, C...
+        x_labels = [chr(65 + i) for i in range(min(x_count, 26))]
+        # Numeri per assi Y: 1, 2, 3...
+        y_labels = [str(i + 1) for i in range(y_count)]
+
+        for i, x in enumerate(x_coords):
+            for j, y in enumerate(y_coords):
+                if i < len(x_labels) and j < len(y_labels):
+                    desc = f"{prefix}{x_labels[i]}{y_labels[j]}"
+                    self.add_point(x, y, z, desc, level)
+                    generated += 1
+
+        return generated
 
     def _mark_modified(self):
         self.metadata["modified"] = datetime.now().isoformat()
@@ -358,46 +461,55 @@ class CoordinateTable(QTableWidget):
         self.setup_table()
     
     def setup_table(self):
-        self.setColumnCount(5)
-        self.setHorizontalHeaderLabels(['ID', 'X (m)', 'Y (m)', 'Z (m)', 'Descrizione'])
-        
+        self.setColumnCount(6)
+        self.setHorizontalHeaderLabels(['ID', 'X (m)', 'Y (m)', 'Z (m)', 'Livello', 'Descrizione'])
+
         # Configurazione header
         header = self.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID fisso
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # X
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Y  
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Y
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Z
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Livello
         header.setStretchLastSection(True)  # Descrizione espandibile
-        
+
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
-        
+
         # Connetti modifiche
         self.cellChanged.connect(self.on_cell_changed)
     
-    def refresh(self):
-        """Aggiorna tabella completa"""
+    def refresh(self, filter_level=None):
+        """Aggiorna tabella completa con filtro opzionale per livello"""
         points = self.model.get_point_list()
+
+        # Applica filtro livello se specificato
+        if filter_level and filter_level != "Tutti":
+            points = [p for p in points if p.level == filter_level]
+
         self.setRowCount(len(points))
-        
+
         # Blocca segnali durante refresh
         self.blockSignals(True)
-        
+
         for row, point in enumerate(points):
             # ID (solo lettura)
             id_item = QTableWidgetItem(str(point.id))
             id_item.setFlags(id_item.flags() & ~Qt.ItemIsEditable)
             self.setItem(row, 0, id_item)
-            
+
             # Coordinate (modificabili con precisione)
             self.setItem(row, 1, QTableWidgetItem(f"{point.x:.4f}"))
             self.setItem(row, 2, QTableWidgetItem(f"{point.y:.4f}"))
             self.setItem(row, 3, QTableWidgetItem(f"{point.z:.3f}"))
-            
+
+            # Livello
+            self.setItem(row, 4, QTableWidgetItem(point.level))
+
             # Descrizione
-            self.setItem(row, 4, QTableWidgetItem(point.description))
-        
+            self.setItem(row, 5, QTableWidgetItem(point.description))
+
         self.blockSignals(False)
     
     def on_cell_changed(self, row, col):
@@ -405,10 +517,10 @@ class CoordinateTable(QTableWidget):
         id_item = self.item(row, 0)
         if not id_item:
             return
-            
+
         point_id = int(id_item.text())
         item = self.item(row, col)
-        
+
         try:
             if col == 1:  # X
                 self.model.update_point(point_id, x=float(item.text()))
@@ -416,7 +528,9 @@ class CoordinateTable(QTableWidget):
                 self.model.update_point(point_id, y=float(item.text()))
             elif col == 3:  # Z
                 self.model.update_point(point_id, z=float(item.text()))
-            elif col == 4:  # Descrizione
+            elif col == 4:  # Livello
+                self.model.update_point(point_id, level=item.text())
+            elif col == 5:  # Descrizione
                 self.model.update_point(point_id, description=item.text())
         except ValueError as e:
             # Valore non valido, ripristina
@@ -474,21 +588,31 @@ class MainWindow(QMainWindow):
         table_group.setLayout(table_layout)
         layout.addWidget(table_group)
         
-        # Barra informazioni
+        # Barra informazioni e filtri
         info_layout = QHBoxLayout()
-        
+
         self.info_label = QLabel("Punti: 0")
         self.info_label.setFont(QFont("Arial", 10, QFont.Bold))
         info_layout.addWidget(self.info_label)
-        
+
         info_layout.addStretch()
-        
+
+        # Filtro livello
+        info_layout.addWidget(QLabel("Filtro Livello:"))
+        self.level_filter = QComboBox()
+        self.level_filter.addItem("Tutti")
+        self.level_filter.currentTextChanged.connect(self.on_level_filter_changed)
+        self.level_filter.setMinimumWidth(120)
+        info_layout.addWidget(self.level_filter)
+
+        info_layout.addStretch()
+
         self.bounds_label = QLabel("")
         self.bounds_label.setFont(QFont("Arial", 9))
         info_layout.addWidget(self.bounds_label)
-        
+
         layout.addLayout(info_layout)
-        
+
         self.refresh_display()
     
     def setup_menus(self):
@@ -514,7 +638,30 @@ class MainWindow(QMainWindow):
         edit_menu.addAction('Duplica Punto Selezionato', self.duplicate_selected_point, 'Ctrl+D')
         edit_menu.addAction('Trasla Tutte le Coordinate...', self.translate_coordinates)
         edit_menu.addSeparator()
+        edit_menu.addAction('Specchia Punti...', self.mirror_points_dialog)
+        edit_menu.addAction('Snap to Grid...', self.snap_to_grid_dialog)
+        edit_menu.addSeparator()
         edit_menu.addAction('Trova Punti Duplicati', self.find_duplicate_points)
+
+        # Menu Livelli
+        levels_menu = menubar.addMenu('Livelli')
+        levels_menu.addAction('Assegna Livello a Selezione...', self.assign_level_dialog)
+        levels_menu.addAction('Copia Livello...', self.copy_level_dialog)
+        levels_menu.addSeparator()
+        levels_menu.addAction('Gestione Livelli...', self.manage_levels_dialog)
+
+        # Menu Genera
+        generate_menu = menubar.addMenu('Genera')
+        generate_menu.addAction('Griglia Regolare...', self.generate_grid_dialog)
+        generate_menu.addAction('Interpiano Automatico...', self.generate_floors_dialog)
+
+        # Menu Selezione
+        selection_menu = menubar.addMenu('Selezione')
+        selection_menu.addAction('Seleziona per Area...', self.select_by_area_dialog)
+        selection_menu.addAction('Seleziona per Quota Z...', self.select_by_z_dialog)
+        selection_menu.addSeparator()
+        selection_menu.addAction('Trasla Selezione...', self.translate_selection_dialog)
+        selection_menu.addAction('Elimina Selezione', self.delete_selection)
 
         # Menu Strumenti
         tools_menu = menubar.addMenu('Strumenti')
@@ -531,10 +678,24 @@ class MainWindow(QMainWindow):
     
     def refresh_display(self):
         """Aggiorna tutte le visualizzazioni"""
-        self.table.refresh()
+        current_filter = self.level_filter.currentText()
+        self.table.refresh(current_filter if current_filter != "Tutti" else None)
         count = len(self.model.points)
         self.info_label.setText(f"Punti: {count}")
-        
+
+        # Aggiorna combo livelli
+        self.level_filter.blockSignals(True)
+        current_selection = self.level_filter.currentText()
+        self.level_filter.clear()
+        self.level_filter.addItem("Tutti")
+        for level in self.model.get_levels():
+            self.level_filter.addItem(level)
+        # Ripristina selezione se esiste ancora
+        index = self.level_filter.findText(current_selection)
+        if index >= 0:
+            self.level_filter.setCurrentIndex(index)
+        self.level_filter.blockSignals(False)
+
         # Aggiorna bounds
         if count > 0:
             bounds = self.model.get_bounds()
@@ -544,6 +705,10 @@ class MainWindow(QMainWindow):
             self.bounds_label.setText(bounds_text)
         else:
             self.bounds_label.setText("")
+
+    def on_level_filter_changed(self, level):
+        """Gestisce cambio filtro livello"""
+        self.table.refresh(level if level != "Tutti" else None)
     
     def new_project(self):
         """Nuovo progetto"""
@@ -618,7 +783,8 @@ class MainWindow(QMainWindow):
                             y = float(row.get('Y', row.get('y', 0)))
                             z = float(row.get('Z', row.get('z', 0)))
                             desc = row.get('Descrizione', row.get('Description', row.get('descrizione', '')))
-                            self.model.add_point(x, y, z, desc)
+                            level = row.get('Livello', row.get('Level', row.get('livello', '')))
+                            self.model.add_point(x, y, z, desc, level)
                             imported += 1
                         except (ValueError, KeyError) as e:
                             continue
@@ -644,9 +810,9 @@ class MainWindow(QMainWindow):
         if filename:
             try:
                 with open(filename, 'w', encoding='utf-8') as f:
-                    f.write("ID,X,Y,Z,Descrizione\n")
+                    f.write("ID,X,Y,Z,Livello,Descrizione\n")
                     for point in self.model.get_point_list():
-                        f.write(f'{point.id},{point.x:.4f},{point.y:.4f},{point.z:.3f},"{point.description}"\n')
+                        f.write(f'{point.id},{point.x:.4f},{point.y:.4f},{point.z:.3f},"{point.level}","{point.description}"\n')
                 QMessageBox.information(self, "Esportazione Completata",
                                       f"CSV esportato in:\n{filename}")
             except Exception as e:
@@ -842,7 +1008,360 @@ Distanza 2D (planimetrica): {result['distance_2d']:.4f} m
 Distanza 3D (spaziale): {result['distance_3d']:.4f} m
 """
             QMessageBox.information(self, "Calcolo Distanza", msg)
-    
+
+    def assign_level_dialog(self):
+        """Assegna livello a punti selezionati"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.warning(self, "Attenzione", "Seleziona almeno un punto")
+            return
+
+        level, ok = QInputDialog.getText(self, "Assegna Livello",
+                                         "Livello (es: PT, P1, P2):")
+        if ok and level:
+            point_ids = []
+            for row in selected_rows:
+                id_item = self.table.item(row.row(), 0)
+                if id_item:
+                    point_ids.append(int(id_item.text()))
+
+            self.model.assign_level_to_points(point_ids, level)
+            self.refresh_display()
+            QMessageBox.information(self, "Livello Assegnato",
+                                  f"Livello '{level}' assegnato a {len(point_ids)} punti")
+
+    def copy_level_dialog(self):
+        """Copia piano su altro livello"""
+        levels = self.model.get_levels()
+        if not levels:
+            QMessageBox.warning(self, "Attenzione", "Nessun livello definito")
+            return
+
+        source, ok1 = QInputDialog.getItem(self, "Copia Livello",
+                                           "Livello sorgente:", levels, 0, False)
+        if not ok1:
+            return
+
+        target, ok2 = QInputDialog.getText(self, "Copia Livello",
+                                           "Nuovo livello destinazione:")
+        if not ok2 or not target:
+            return
+
+        offset_z, ok3 = QInputDialog.getDouble(self, "Offset Z",
+                                                "Offset verticale (m):", 3.5, -100, 100, 2)
+        if not ok3:
+            return
+
+        copied = self.model.copy_level(source, target, offset_z)
+        self.refresh_display()
+        QMessageBox.information(self, "Livello Copiato",
+                              f"{copied} punti copiati da '{source}' a '{target}'")
+
+    def manage_levels_dialog(self):
+        """Gestione livelli"""
+        levels = self.model.get_levels()
+        if not levels:
+            QMessageBox.information(self, "Gestione Livelli", "Nessun livello definito")
+            return
+
+        msg = "LIVELLI DEFINITI:\n\n"
+        for level in levels:
+            points_count = len(self.model.get_points_by_level(level))
+            msg += f"• {level}: {points_count} punti\n"
+
+        QMessageBox.information(self, "Gestione Livelli", msg)
+
+    def generate_grid_dialog(self):
+        """Genera griglia regolare"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Genera Griglia Regolare")
+        layout = QGridLayout()
+
+        # Input parametri
+        layout.addWidget(QLabel("X inizio (m):"), 0, 0)
+        x_start = QDoubleSpinBox()
+        x_start.setRange(-1000, 1000)
+        x_start.setValue(0.0)
+        x_start.setDecimals(2)
+        layout.addWidget(x_start, 0, 1)
+
+        layout.addWidget(QLabel("X fine (m):"), 0, 2)
+        x_end = QDoubleSpinBox()
+        x_end.setRange(-1000, 1000)
+        x_end.setValue(20.0)
+        x_end.setDecimals(2)
+        layout.addWidget(x_end, 0, 3)
+
+        layout.addWidget(QLabel("Numero assi X:"), 1, 0)
+        x_count = QSpinBox()
+        x_count.setRange(1, 26)
+        x_count.setValue(5)
+        layout.addWidget(x_count, 1, 1)
+
+        layout.addWidget(QLabel("Y inizio (m):"), 2, 0)
+        y_start = QDoubleSpinBox()
+        y_start.setRange(-1000, 1000)
+        y_start.setValue(0.0)
+        y_start.setDecimals(2)
+        layout.addWidget(y_start, 2, 1)
+
+        layout.addWidget(QLabel("Y fine (m):"), 2, 2)
+        y_end = QDoubleSpinBox()
+        y_end.setRange(-1000, 1000)
+        y_end.setValue(15.0)
+        y_end.setDecimals(2)
+        layout.addWidget(y_end, 2, 3)
+
+        layout.addWidget(QLabel("Numero assi Y:"), 3, 0)
+        y_count = QSpinBox()
+        y_count.setRange(1, 50)
+        y_count.setValue(4)
+        layout.addWidget(y_count, 3, 1)
+
+        layout.addWidget(QLabel("Quota Z (m):"), 4, 0)
+        z_value = QDoubleSpinBox()
+        z_value.setRange(-100, 100)
+        z_value.setValue(0.0)
+        z_value.setDecimals(3)
+        layout.addWidget(z_value, 4, 1)
+
+        layout.addWidget(QLabel("Livello:"), 4, 2)
+        level_input = QLineEdit()
+        level_input.setText("PT")
+        layout.addWidget(level_input, 4, 3)
+
+        layout.addWidget(QLabel("Prefisso (opz):"), 5, 0)
+        prefix = QLineEdit()
+        prefix.setPlaceholderText("es: F1-")
+        layout.addWidget(prefix, 5, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons, 6, 0, 1, 4)
+
+        dialog.setLayout(layout)
+
+        if dialog.exec_() == QDialog.Accepted:
+            generated = self.model.generate_grid(
+                x_start.value(), x_end.value(), x_count.value(),
+                y_start.value(), y_end.value(), y_count.value(),
+                z_value.value(), level_input.text(), prefix.text()
+            )
+            self.refresh_display()
+            QMessageBox.information(self, "Griglia Generata",
+                                  f"{generated} punti generati")
+
+    def generate_floors_dialog(self):
+        """Genera interpiano automatico"""
+        levels = self.model.get_levels()
+        if not levels:
+            QMessageBox.warning(self, "Attenzione", "Nessun livello base definito")
+            return
+
+        source, ok1 = QInputDialog.getItem(self, "Interpiano Automatico",
+                                           "Livello base da duplicare:", levels, 0, False)
+        if not ok1:
+            return
+
+        floors, ok2 = QInputDialog.getInt(self, "Numero Piani",
+                                          "Quanti piani superiori generare:", 3, 1, 20)
+        if not ok2:
+            return
+
+        height, ok3 = QInputDialog.getDouble(self, "Altezza Interpiano",
+                                             "Altezza interpiano (m):", 3.5, 0.1, 10.0, 2)
+        if not ok3:
+            return
+
+        total_copied = 0
+        for i in range(1, floors + 1):
+            target_level = f"P{i}"
+            offset_z = i * height
+            copied = self.model.copy_level(source, target_level, offset_z)
+            total_copied += copied
+
+        self.refresh_display()
+        QMessageBox.information(self, "Interpiano Generato",
+                              f"{total_copied} punti generati su {floors} piani")
+
+    def select_by_area_dialog(self):
+        """Seleziona punti per area"""
+        if not self.model.points:
+            QMessageBox.warning(self, "Attenzione", "Nessun punto disponibile")
+            return
+
+        bounds = self.model.get_bounds()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Seleziona per Area")
+        layout = QGridLayout()
+
+        layout.addWidget(QLabel("X min (m):"), 0, 0)
+        x_min = QDoubleSpinBox()
+        x_min.setRange(-10000, 10000)
+        x_min.setValue(bounds['x_min'])
+        x_min.setDecimals(4)
+        layout.addWidget(x_min, 0, 1)
+
+        layout.addWidget(QLabel("X max (m):"), 0, 2)
+        x_max = QDoubleSpinBox()
+        x_max.setRange(-10000, 10000)
+        x_max.setValue(bounds['x_max'])
+        x_max.setDecimals(4)
+        layout.addWidget(x_max, 0, 3)
+
+        layout.addWidget(QLabel("Y min (m):"), 1, 0)
+        y_min = QDoubleSpinBox()
+        y_min.setRange(-10000, 10000)
+        y_min.setValue(bounds['y_min'])
+        y_min.setDecimals(4)
+        layout.addWidget(y_min, 1, 1)
+
+        layout.addWidget(QLabel("Y max (m):"), 1, 2)
+        y_max = QDoubleSpinBox()
+        y_max.setRange(-10000, 10000)
+        y_max.setValue(bounds['y_max'])
+        y_max.setDecimals(4)
+        layout.addWidget(y_max, 1, 3)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons, 2, 0, 1, 4)
+
+        dialog.setLayout(layout)
+
+        if dialog.exec_() == QDialog.Accepted:
+            selected = self.model.select_points_by_area(
+                x_min.value(), x_max.value(), y_min.value(), y_max.value()
+            )
+            QMessageBox.information(self, "Selezione per Area",
+                                  f"{len(selected)} punti selezionati:\n{selected[:20]}")
+
+    def select_by_z_dialog(self):
+        """Seleziona punti per quota Z"""
+        if not self.model.points:
+            QMessageBox.warning(self, "Attenzione", "Nessun punto disponibile")
+            return
+
+        z_value, ok1 = QInputDialog.getDouble(self, "Seleziona per Quota",
+                                               "Quota Z (m):", 0.0, -100, 100, 3)
+        if not ok1:
+            return
+
+        tolerance, ok2 = QInputDialog.getDouble(self, "Tolleranza",
+                                                 "Tolleranza (m):", 0.001, 0.0001, 1.0, 4)
+        if not ok2:
+            return
+
+        selected = self.model.select_points_by_z(z_value, tolerance)
+        QMessageBox.information(self, "Selezione per Quota",
+                              f"{len(selected)} punti a quota Z={z_value:.3f}m:\n{selected[:20]}")
+
+    def translate_selection_dialog(self):
+        """Trasla punti selezionati"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.warning(self, "Attenzione", "Seleziona almeno un punto")
+            return
+
+        point_ids = []
+        for row in selected_rows:
+            id_item = self.table.item(row.row(), 0)
+            if id_item:
+                point_ids.append(int(id_item.text()))
+
+        dx, ok1 = QInputDialog.getDouble(self, "Traslazione", "Offset X (m):", 0.0, -10000, 10000, 4)
+        if not ok1:
+            return
+        dy, ok2 = QInputDialog.getDouble(self, "Traslazione", "Offset Y (m):", 0.0, -10000, 10000, 4)
+        if not ok2:
+            return
+        dz, ok3 = QInputDialog.getDouble(self, "Traslazione", "Offset Z (m):", 0.0, -1000, 1000, 3)
+        if not ok3:
+            return
+
+        self.model.translate_points(point_ids, dx, dy, dz)
+        self.refresh_display()
+        QMessageBox.information(self, "Traslazione Completata",
+                              f"{len(point_ids)} punti traslati")
+
+    def delete_selection(self):
+        """Elimina punti selezionati"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.warning(self, "Attenzione", "Seleziona almeno un punto")
+            return
+
+        point_ids = []
+        for row in selected_rows:
+            id_item = self.table.item(row.row(), 0)
+            if id_item:
+                point_ids.append(int(id_item.text()))
+
+        reply = QMessageBox.question(
+            self, 'Conferma Eliminazione',
+            f'Eliminare {len(point_ids)} punti selezionati?',
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            self.model.delete_points(point_ids)
+            self.refresh_display()
+            QMessageBox.information(self, "Eliminazione Completata",
+                                  f"{len(point_ids)} punti eliminati")
+
+    def mirror_points_dialog(self):
+        """Specchia punti selezionati"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.warning(self, "Attenzione", "Seleziona almeno un punto")
+            return
+
+        point_ids = []
+        for row in selected_rows:
+            id_item = self.table.item(row.row(), 0)
+            if id_item:
+                point_ids.append(int(id_item.text()))
+
+        axis, ok1 = QInputDialog.getItem(self, "Specchiamento",
+                                         "Asse di specchiamento:", ['X', 'Y', 'Z'], 0, False)
+        if not ok1:
+            return
+
+        value, ok2 = QInputDialog.getDouble(self, "Valore Asse",
+                                            f"Valore asse {axis} (m):", 0.0, -1000, 1000, 3)
+        if not ok2:
+            return
+
+        self.model.mirror_points(point_ids, axis.lower(), value)
+        self.refresh_display()
+        QMessageBox.information(self, "Specchiamento Completato",
+                              f"{len(point_ids)} punti specchiati rispetto a {axis}={value:.3f}m")
+
+    def snap_to_grid_dialog(self):
+        """Snap punti a griglia"""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.warning(self, "Attenzione", "Seleziona almeno un punto")
+            return
+
+        point_ids = []
+        for row in selected_rows:
+            id_item = self.table.item(row.row(), 0)
+            if id_item:
+                point_ids.append(int(id_item.text()))
+
+        grid_size, ok = QInputDialog.getDouble(self, "Snap to Grid",
+                                                "Dimensione griglia (m):", 0.5, 0.01, 10.0, 3)
+        if not ok:
+            return
+
+        self.model.snap_to_grid(point_ids, grid_size)
+        self.refresh_display()
+        QMessageBox.information(self, "Snap Completato",
+                              f"{len(point_ids)} punti arrotondati a griglia {grid_size}m")
+
     def show_statistics(self):
         """Mostra statistiche complete del progetto"""
         points = list(self.model.points.values())
@@ -930,24 +1449,42 @@ Y centro: {sum(y_coords)/len(y_coords):.4f} m
         """Informazioni sull'applicazione"""
         about_text = """INPUT COORDINATE FILI FISSI
 
-Applicazione professionale per l'inserimento e gestione delle coordinate
-spaziali per la progettazione di fili fissi strutturali.
+Applicazione professionale avanzata per l'inserimento e gestione
+delle coordinate spaziali per la progettazione di fili fissi strutturali.
 
 Sviluppato per:
 Arch. Michelangelo Bartolotta
 Ordine Architetti Agrigento n. 1557
 
-Funzionalità:
-• Input rapido coordinate X, Y, Z
-• Modifica diretta in tabella
+Funzionalità Base:
+• Input rapido coordinate X, Y, Z con livelli
+• Modifica diretta in tabella (6 colonne)
 • Import/Export: JSON, CSV, DXF
-• Calcolo distanze tra punti
-• Duplicazione e traslazione coordinate
+• Calcolo distanze tra punti (2D/3D)
 • Rilevamento punti duplicati
-• Gestione metadata progetto
-• Statistiche geometriche complete
 
-Versione: 3.0 - Professionale
+Gestione Livelli/Piani:
+• Assegnazione livelli a punti
+• Copia piano con offset verticale
+• Interpiano automatico multipiano
+• Filtro visualizzazione per livello
+
+Generatori Automatici:
+• Griglia regolare con nomenclatura (A1, A2, B1...)
+• Generazione multipiano
+
+Selezione Avanzata:
+• Selezione per area rettangolare
+• Selezione per quota Z
+• Operazioni su selezione multipla
+
+Trasformazioni:
+• Traslazione punti selezionati
+• Specchiamento rispetto ad assi
+• Snap to grid parametrico
+• Duplicazione con offset
+
+Versione: 4.0 - Avanzata BIM
 """
         QMessageBox.about(self, "Informazioni", about_text)
 
@@ -955,7 +1492,7 @@ Versione: 3.0 - Professionale
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Input Coordinate Fili Fissi")
-    app.setApplicationVersion("3.0")
+    app.setApplicationVersion("4.0")
     
     # Stile applicazione
     app.setStyleSheet("""
