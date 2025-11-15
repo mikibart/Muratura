@@ -13,6 +13,18 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 
+# Matplotlib imports (opzionali)
+try:
+    import matplotlib
+    matplotlib.use('Qt5Agg')
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+    from matplotlib.figure import Figure
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
 
 class Point:
     """Punto con coordinate spaziali"""
@@ -358,6 +370,213 @@ class MetadataDialog(QDialog):
         return self.metadata
 
 
+class PlotDialog(QDialog):
+    """Dialog per visualizzazione grafica 2D/3D dei punti"""
+
+    def __init__(self, model, parent=None):
+        super().__init__(parent)
+        self.model = model
+        self.setWindowTitle("Vista Grafica Coordinate")
+        self.setMinimumSize(900, 700)
+        self.setup_ui()
+
+    def setup_ui(self):
+        if not MATPLOTLIB_AVAILABLE:
+            layout = QVBoxLayout()
+            label = QLabel("Matplotlib non disponibile.\nInstallare con: pip install matplotlib")
+            label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(label)
+            close_btn = QPushButton("Chiudi")
+            close_btn.clicked.connect(self.close)
+            layout.addWidget(close_btn)
+            self.setLayout(layout)
+            return
+
+        layout = QVBoxLayout()
+
+        # Toolbar controlli
+        controls = QHBoxLayout()
+
+        controls.addWidget(QLabel("Livello:"))
+        self.level_combo = QComboBox()
+        self.level_combo.addItem("Tutti")
+        for level in self.model.get_levels():
+            self.level_combo.addItem(level)
+        self.level_combo.currentTextChanged.connect(self.update_plot)
+        controls.addWidget(self.level_combo)
+
+        controls.addWidget(QLabel("Vista:"))
+        self.view_combo = QComboBox()
+        self.view_combo.addItems(["2D Planimetria (XY)", "Vista XZ", "Vista YZ", "3D"])
+        self.view_combo.currentTextChanged.connect(self.update_plot)
+        controls.addWidget(self.view_combo)
+
+        self.show_labels = QCheckBox("Mostra Etichette")
+        self.show_labels.setChecked(True)
+        self.show_labels.stateChanged.connect(self.update_plot)
+        controls.addWidget(self.show_labels)
+
+        self.show_grid = QCheckBox("Griglia")
+        self.show_grid.setChecked(True)
+        self.show_grid.stateChanged.connect(self.update_plot)
+        controls.addWidget(self.show_grid)
+
+        export_btn = QPushButton("Esporta PNG")
+        export_btn.clicked.connect(self.export_image)
+        controls.addWidget(export_btn)
+
+        controls.addStretch()
+        layout.addLayout(controls)
+
+        # Canvas matplotlib
+        self.figure = Figure(figsize=(10, 8))
+        self.canvas = FigureCanvas(self.figure)
+        layout.addWidget(self.canvas)
+
+        # Toolbar navigazione
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        layout.addWidget(self.toolbar)
+
+        # Bottone chiudi
+        close_btn = QPushButton("Chiudi")
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
+
+        self.setLayout(layout)
+        self.update_plot()
+
+    def update_plot(self):
+        """Aggiorna il grafico"""
+        if not MATPLOTLIB_AVAILABLE:
+            return
+
+        self.figure.clear()
+
+        # Filtra punti per livello
+        filter_level = self.level_combo.currentText()
+        if filter_level == "Tutti":
+            points = list(self.model.points.values())
+        else:
+            points = self.model.get_points_by_level(filter_level)
+
+        if not points:
+            ax = self.figure.add_subplot(111)
+            ax.text(0.5, 0.5, 'Nessun punto da visualizzare',
+                   ha='center', va='center', fontsize=14)
+            self.canvas.draw()
+            return
+
+        view_type = self.view_combo.currentText()
+
+        if "3D" in view_type:
+            ax = self.figure.add_subplot(111, projection='3d')
+            self.plot_3d(ax, points)
+        else:
+            ax = self.figure.add_subplot(111)
+            self.plot_2d(ax, points, view_type)
+
+        self.canvas.draw()
+
+    def plot_2d(self, ax, points, view_type):
+        """Plot 2D"""
+        # Colori per livelli
+        levels = list(set(p.level for p in points if p.level))
+        colors = plt.cm.tab10(range(len(levels))) if levels else ['blue']
+        level_colors = {level: colors[i % len(colors)] for i, level in enumerate(levels)}
+
+        # Seleziona assi
+        if "XY" in view_type:
+            x_vals = [p.x for p in points]
+            y_vals = [p.y for p in points]
+            xlabel, ylabel = 'X [m]', 'Y [m]'
+        elif "XZ" in view_type:
+            x_vals = [p.x for p in points]
+            y_vals = [p.z for p in points]
+            xlabel, ylabel = 'X [m]', 'Z [m]'
+        else:  # YZ
+            x_vals = [p.y for p in points]
+            y_vals = [p.z for p in points]
+            xlabel, ylabel = 'Y [m]', 'Z [m]'
+
+        # Plot punti colorati per livello
+        for point in points:
+            if "XY" in view_type:
+                x, y = point.x, point.y
+            elif "XZ" in view_type:
+                x, y = point.x, point.z
+            else:
+                x, y = point.y, point.z
+
+            color = level_colors.get(point.level, 'blue') if point.level else 'blue'
+            ax.scatter(x, y, c=[color], s=100, alpha=0.6, edgecolors='black', linewidths=1)
+
+            # Etichette
+            if self.show_labels.isChecked():
+                label = point.description if point.description else f"P{point.id}"
+                ax.annotate(label, (x, y), xytext=(5, 5),
+                           textcoords='offset points', fontsize=8)
+
+        ax.set_xlabel(xlabel, fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(f'Vista {view_type} - {len(points)} punti', fontsize=14, fontweight='bold')
+        ax.grid(self.show_grid.isChecked(), alpha=0.3)
+        ax.axis('equal')
+
+        # Legenda livelli
+        if levels:
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor=level_colors[level], label=level)
+                             for level in levels]
+            ax.legend(handles=legend_elements, loc='best', fontsize=9)
+
+    def plot_3d(self, ax, points):
+        """Plot 3D"""
+        levels = list(set(p.level for p in points if p.level))
+        colors = plt.cm.tab10(range(len(levels))) if levels else ['blue']
+        level_colors = {level: colors[i % len(colors)] for i, level in enumerate(levels)}
+
+        for point in points:
+            color = level_colors.get(point.level, 'blue') if point.level else 'blue'
+            ax.scatter(point.x, point.y, point.z, c=[color], s=100,
+                      alpha=0.6, edgecolors='black', linewidths=1)
+
+            if self.show_labels.isChecked():
+                label = point.description if point.description else f"P{point.id}"
+                ax.text(point.x, point.y, point.z, label, fontsize=8)
+
+        ax.set_xlabel('X [m]', fontsize=12)
+        ax.set_ylabel('Y [m]', fontsize=12)
+        ax.set_zlabel('Z [m]', fontsize=12)
+        ax.set_title(f'Vista 3D - {len(points)} punti', fontsize=14, fontweight='bold')
+        ax.grid(self.show_grid.isChecked(), alpha=0.3)
+
+        # Legenda
+        if levels:
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor=level_colors[level], label=level)
+                             for level in levels]
+            ax.legend(handles=legend_elements, loc='best', fontsize=9)
+
+    def export_image(self):
+        """Esporta grafico come PNG"""
+        if not MATPLOTLIB_AVAILABLE:
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Esporta Immagine", "coordinate_plot.png",
+            "Immagine PNG (*.png);;Tutti i file (*)"
+        )
+
+        if filename:
+            try:
+                self.figure.savefig(filename, dpi=300, bbox_inches='tight')
+                QMessageBox.information(self, "Esportazione Completata",
+                                      f"Immagine esportata in:\n{filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore Esportazione",
+                                   f"Impossibile esportare immagine:\n{e}")
+
+
 class CoordinateInputPanel(QGroupBox):
     """Pannello input coordinate semplificato"""
     
@@ -662,6 +881,10 @@ class MainWindow(QMainWindow):
         selection_menu.addSeparator()
         selection_menu.addAction('Trasla Selezione...', self.translate_selection_dialog)
         selection_menu.addAction('Elimina Selezione', self.delete_selection)
+
+        # Menu Visualizza
+        view_menu = menubar.addMenu('Visualizza')
+        view_menu.addAction('Vista Grafica 2D/3D...', self.show_plot_window, 'Ctrl+G')
 
         # Menu Strumenti
         tools_menu = menubar.addMenu('Strumenti')
@@ -1362,6 +1585,26 @@ Distanza 3D (spaziale): {result['distance_3d']:.4f} m
         QMessageBox.information(self, "Snap Completato",
                               f"{len(point_ids)} punti arrotondati a griglia {grid_size}m")
 
+    def show_plot_window(self):
+        """Mostra finestra visualizzazione grafica"""
+        if not self.model.points:
+            QMessageBox.warning(self, "Attenzione", "Nessun punto da visualizzare")
+            return
+
+        if not MATPLOTLIB_AVAILABLE:
+            reply = QMessageBox.question(
+                self, "Matplotlib Non Disponibile",
+                "Matplotlib non è installato.\n\nVuoi installarlo ora?\n\nEsegui: pip install matplotlib",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                QMessageBox.information(self, "Installazione",
+                                      "Apri un terminale ed esegui:\n\npip install matplotlib\n\nPoi riavvia l'applicazione.")
+            return
+
+        dialog = PlotDialog(self.model, self)
+        dialog.exec_()
+
     def show_statistics(self):
         """Mostra statistiche complete del progetto"""
         points = list(self.model.points.values())
@@ -1447,7 +1690,9 @@ Y centro: {sum(y_coords)/len(y_coords):.4f} m
     
     def show_about(self):
         """Informazioni sull'applicazione"""
-        about_text = """INPUT COORDINATE FILI FISSI
+        matplotlib_status = "✓ Disponibile" if MATPLOTLIB_AVAILABLE else "✗ Non installato"
+
+        about_text = f"""INPUT COORDINATE FILI FISSI
 
 Applicazione professionale avanzata per l'inserimento e gestione
 delle coordinate spaziali per la progettazione di fili fissi strutturali.
@@ -1484,7 +1729,16 @@ Trasformazioni:
 • Snap to grid parametrico
 • Duplicazione con offset
 
-Versione: 4.0 - Avanzata BIM
+Visualizzazione:
+• Vista grafica 2D/3D interattiva
+• Plot planimetria (XY), sezioni (XZ, YZ)
+• Vista 3D navigabile
+• Colori per livelli, etichette
+• Export immagini PNG ad alta risoluzione
+
+Matplotlib: {matplotlib_status}
+
+Versione: 4.5 - Completa BIM+CAD
 """
         QMessageBox.about(self, "Informazioni", about_text)
 
@@ -1492,7 +1746,7 @@ Versione: 4.0 - Avanzata BIM
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Input Coordinate Fili Fissi")
-    app.setApplicationVersion("4.0")
+    app.setApplicationVersion("4.5")
     
     # Stile applicazione
     app.setStyleSheet("""
