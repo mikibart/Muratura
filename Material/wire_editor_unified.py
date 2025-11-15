@@ -1865,6 +1865,10 @@ class UnifiedMainWindow(QMainWindow):
 
     def on_tab_changed(self, index: int):
         """Gestisce cambio tab"""
+        # Evita errori durante inizializzazione
+        if not hasattr(self, 'status_label'):
+            return
+
         tab_names = ["Table View", "Canvas View", "3D View", "Reports"]
         if index < len(tab_names):
             self.status_label.setText(f"Active: {tab_names[index]}")
