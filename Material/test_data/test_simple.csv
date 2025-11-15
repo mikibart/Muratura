@@ -1,0 +1,9 @@
+X,Y,Z,Livello,Descrizione
+0.0000,0.0000,0.000,PT,Punto di riferimento
+5.5000,0.0000,0.000,PT,Angolo Nord-Est
+5.5000,8.2500,0.000,PT,Angolo Sud-Est
+0.0000,8.2500,0.000,PT,Angolo Sud-Ovest
+2.7500,0.0000,3.200,P1,Filo piano 1 - Centro Nord
+2.7500,8.2500,3.200,P1,Filo piano 1 - Centro Sud
+0.0000,4.1250,3.200,P1,Filo piano 1 - Lato Ovest
+5.5000,4.1250,3.200,P1,Filo piano 1 - Lato Est

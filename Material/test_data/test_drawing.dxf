@@ -1,0 +1,268 @@
+  0
+SECTION
+  2
+HEADER
+  9
+$ACADVER
+  1
+AC1015
+  9
+$INSUNITS
+ 70
+6
+  0
+ENDSEC
+  0
+SECTION
+  2
+TABLES
+  0
+TABLE
+  2
+LAYER
+ 70
+4
+  0
+LAYER
+  2
+PT
+ 70
+0
+ 62
+7
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+P1
+ 70
+0
+ 62
+1
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+P2
+ 70
+0
+ 62
+2
+  6
+CONTINUOUS
+  0
+LAYER
+  2
+COPERTURA
+ 70
+0
+ 62
+4
+  6
+CONTINUOUS
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+POINT
+  8
+PT
+ 10
+0.0
+ 20
+0.0
+ 30
+0.0
+  0
+TEXT
+  8
+PT
+ 10
+0.0
+ 20
+0.0
+ 30
+0.0
+  1
+Origine
+ 40
+0.25
+  0
+POINT
+  8
+PT
+ 10
+5.5
+ 20
+0.0
+ 30
+0.0
+  0
+TEXT
+  8
+PT
+ 10
+5.5
+ 20
+0.0
+ 30
+0.0
+  1
+Angolo NE
+ 40
+0.25
+  0
+POINT
+  8
+PT
+ 10
+5.5
+ 20
+8.25
+ 30
+0.0
+  0
+TEXT
+  8
+PT
+ 10
+5.5
+ 20
+8.25
+ 30
+0.0
+  1
+Angolo SE
+ 40
+0.25
+  0
+POINT
+  8
+PT
+ 10
+0.0
+ 20
+8.25
+ 30
+0.0
+  0
+TEXT
+  8
+PT
+ 10
+0.0
+ 20
+8.25
+ 30
+0.0
+  1
+Angolo SO
+ 40
+0.25
+  0
+POINT
+  8
+P1
+ 10
+2.75
+ 20
+0.0
+ 30
+3.2
+  0
+TEXT
+  8
+P1
+ 10
+2.75
+ 20
+0.0
+ 30
+3.2
+  1
+P1 Centro Nord
+ 40
+0.25
+  0
+POINT
+  8
+P1
+ 10
+2.75
+ 20
+8.25
+ 30
+3.2
+  0
+TEXT
+  8
+P1
+ 10
+2.75
+ 20
+8.25
+ 30
+3.2
+  1
+P1 Centro Sud
+ 40
+0.25
+  0
+POINT
+  8
+P2
+ 10
+2.75
+ 20
+4.125
+ 30
+6.4
+  0
+TEXT
+  8
+P2
+ 10
+2.75
+ 20
+4.125
+ 30
+6.4
+  1
+P2 Centro
+ 40
+0.25
+  0
+POINT
+  8
+COPERTURA
+ 10
+2.75
+ 20
+4.125
+ 30
+9.6
+  0
+TEXT
+  8
+COPERTURA
+ 10
+2.75
+ 20
+4.125
+ 30
+9.6
+  1
+Colmo
+ 40
+0.25
+  0
+ENDSEC
+  0
+EOF

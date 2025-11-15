@@ -1,0 +1,16 @@
+ID,X,Y,Z,Livello,Descrizione
+1,0.0000,0.0000,0.000,PT,Punto di riferimento
+2,5.5000,0.0000,0.000,PT,Angolo Nord-Est
+3,5.5000,8.2500,0.000,PT,Angolo Sud-Est
+4,0.0000,8.2500,0.000,PT,Angolo Sud-Ovest
+5,2.7500,0.0000,3.200,P1,Filo piano 1 - Centro Nord
+6,2.7500,8.2500,3.200,P1,Filo piano 1 - Centro Sud
+7,0.0000,4.1250,3.200,P1,Filo piano 1 - Lato Ovest
+8,5.5000,4.1250,3.200,P1,Filo piano 1 - Lato Est
+9,2.7500,4.1250,6.400,P2,Filo piano 2 - Centro
+10,1.3750,2.0625,6.400,P2,Filo piano 2 - Quadrante NO
+11,4.1250,2.0625,6.400,P2,Filo piano 2 - Quadrante NE
+12,4.1250,6.1875,6.400,P2,Filo piano 2 - Quadrante SE
+13,1.3750,6.1875,6.400,P2,Filo piano 2 - Quadrante SO
+14,2.7500,4.1250,9.600,COPERTURA,Colmo copertura
+15,0.5000,1.0000,9.600,COPERTURA,Filo di gronda Nord-Ovest
