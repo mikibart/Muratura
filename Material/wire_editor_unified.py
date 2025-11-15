@@ -1040,6 +1040,192 @@ class WireCanvasView(QWidget):
 
 
 # ============================================================================
+# 3D VISUALIZATION COMPONENTS
+# ============================================================================
+
+class Visualization3DWidget(QWidget):
+    """Widget visualizzazione 3D con matplotlib"""
+
+    def __init__(self, model: UnifiedModel, parent=None):
+        super().__init__(parent)
+        self.model = model
+        self.setup_ui()
+
+    def setup_ui(self):
+        """Setup interfaccia"""
+        layout = QVBoxLayout()
+
+        if not MATPLOTLIB_AVAILABLE:
+            label = QLabel("⚠️ Matplotlib non disponibile\n\nInstallare con: pip install matplotlib")
+            label.setAlignment(Qt.AlignCenter)
+            label.setFont(QFont("Arial", 12))
+            layout.addWidget(label)
+            self.setLayout(layout)
+            return
+
+        # Canvas matplotlib
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+
+        self.figure = Figure(figsize=(10, 8))
+        self.canvas = FigureCanvas(self.figure)
+        self.ax = self.figure.add_subplot(111, projection='3d')
+
+        # Toolbar matplotlib
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        layout.addWidget(self.toolbar)
+        layout.addWidget(self.canvas)
+
+        # Controlli vista
+        controls_layout = QHBoxLayout()
+
+        # Vista predefinite
+        btn_xy = QPushButton("Vista XY (Top)")
+        btn_xy.clicked.connect(lambda: self.set_view(90, -90))
+        controls_layout.addWidget(btn_xy)
+
+        btn_xz = QPushButton("Vista XZ (Front)")
+        btn_xz.clicked.connect(lambda: self.set_view(0, -90))
+        controls_layout.addWidget(btn_xz)
+
+        btn_yz = QPushButton("Vista YZ (Side)")
+        btn_yz.clicked.connect(lambda: self.set_view(0, 0))
+        controls_layout.addWidget(btn_yz)
+
+        btn_iso = QPushButton("Vista Isometrica")
+        btn_iso.clicked.connect(lambda: self.set_view(30, -45))
+        controls_layout.addWidget(btn_iso)
+
+        controls_layout.addStretch()
+
+        # Checkbox visualizzazione
+        self.chk_nodes = QCheckBox("Nodi")
+        self.chk_nodes.setChecked(True)
+        self.chk_nodes.toggled.connect(self.refresh_plot)
+        controls_layout.addWidget(self.chk_nodes)
+
+        self.chk_edges = QCheckBox("Edges")
+        self.chk_edges.setChecked(True)
+        self.chk_edges.toggled.connect(self.refresh_plot)
+        controls_layout.addWidget(self.chk_edges)
+
+        self.chk_labels = QCheckBox("Labels")
+        self.chk_labels.setChecked(True)
+        self.chk_labels.toggled.connect(self.refresh_plot)
+        controls_layout.addWidget(self.chk_labels)
+
+        btn_refresh = QPushButton("🔄 Refresh")
+        btn_refresh.clicked.connect(self.refresh_plot)
+        controls_layout.addWidget(btn_refresh)
+
+        layout.addLayout(controls_layout)
+
+        self.setLayout(layout)
+
+        # Plot iniziale
+        self.refresh_plot()
+
+    def set_view(self, elev: float, azim: float):
+        """Imposta vista 3D"""
+        if MATPLOTLIB_AVAILABLE:
+            self.ax.view_init(elev=elev, azim=azim)
+            self.canvas.draw()
+
+    def refresh_plot(self):
+        """Aggiorna plot 3D"""
+        if not MATPLOTLIB_AVAILABLE:
+            return
+
+        self.ax.clear()
+
+        if not self.model.nodes:
+            self.ax.text(0.5, 0.5, 0.5, 'Nessun nodo da visualizzare',
+                        ha='center', va='center', fontsize=12)
+            self.canvas.draw()
+            return
+
+        # Raccogli coordinate
+        nodes = list(self.model.nodes.values())
+        xs = [n.x for n in nodes]
+        ys = [n.y for n in nodes]
+        zs = [n.z for n in nodes]
+
+        # Disegna edges
+        if self.chk_edges.isChecked():
+            for edge in self.model.edges.values():
+                n1 = self.model.nodes.get(edge.node1_id)
+                n2 = self.model.nodes.get(edge.node2_id)
+                if n1 and n2:
+                    self.ax.plot([n1.x, n2.x], [n1.y, n2.y], [n1.z, n2.z],
+                                'k-', linewidth=1, alpha=0.6)
+
+        # Disegna nodi
+        if self.chk_nodes.isChecked():
+            # Colora per livello
+            levels = set(n.level for n in nodes if n.level)
+            if levels:
+                import matplotlib.cm as cm
+                colors_map = cm.get_cmap('tab10')
+                level_to_color = {level: colors_map(i / max(len(levels), 1))
+                                 for i, level in enumerate(sorted(levels))}
+
+                for level in levels:
+                    level_nodes = [n for n in nodes if n.level == level]
+                    if level_nodes:
+                        lxs = [n.x for n in level_nodes]
+                        lys = [n.y for n in level_nodes]
+                        lzs = [n.z for n in level_nodes]
+                        self.ax.scatter(lxs, lys, lzs, c=[level_to_color[level]],
+                                      s=50, label=f"Livello {level}", alpha=0.8)
+
+                # Nodi senza livello
+                no_level = [n for n in nodes if not n.level]
+                if no_level:
+                    nlxs = [n.x for n in no_level]
+                    nlys = [n.y for n in no_level]
+                    nlzs = [n.z for n in no_level]
+                    self.ax.scatter(nlxs, nlys, nlzs, c='gray',
+                                  s=50, label="Senza livello", alpha=0.8)
+
+                self.ax.legend()
+            else:
+                # Tutti dello stesso colore
+                self.ax.scatter(xs, ys, zs, c='blue', s=50, alpha=0.8)
+
+        # Labels
+        if self.chk_labels.isChecked():
+            for node in nodes:
+                label = f"#{node.id}"
+                if node.description:
+                    label += f"\n{node.description}"
+                self.ax.text(node.x, node.y, node.z, label,
+                           fontsize=8, ha='left')
+
+        # Assi e titolo
+        self.ax.set_xlabel('X (m)', fontsize=10)
+        self.ax.set_ylabel('Y (m)', fontsize=10)
+        self.ax.set_zlabel('Z (m)', fontsize=10)
+        self.ax.set_title(f'Visualizzazione 3D - {len(nodes)} nodi, {len(self.model.edges)} edges',
+                         fontsize=12, fontweight='bold')
+
+        # Griglia
+        self.ax.grid(True, alpha=0.3)
+
+        # Aspect ratio uguale
+        if nodes:
+            bounds = self.model.get_bounds()
+            if bounds:
+                # Set limits con margine
+                margin = 1.0
+                self.ax.set_xlim(bounds['x_min'] - margin, bounds['x_max'] + margin)
+                self.ax.set_ylim(bounds['y_min'] - margin, bounds['y_max'] + margin)
+                self.ax.set_zlim(bounds['z_min'] - margin, bounds['z_max'] + margin)
+
+        self.canvas.draw()
+
+
+# ============================================================================
 # TABLE VIEW COMPONENTS (da wire_editor.py)
 # ============================================================================
 
@@ -1413,39 +1599,77 @@ class UnifiedMainWindow(QMainWindow):
         self.canvas_tab.setLayout(layout)
 
     def setup_viz_tab(self):
-        """Setup tab visualizzazione 3D"""
+        """Setup tab visualizzazione 3D (integrato)"""
         layout = QVBoxLayout()
 
-        # Placeholder per ora
-        label = QLabel("3D Visualization - Vista matplotlib 3D")
-        label.setAlignment(Qt.AlignCenter)
-        label.setFont(QFont("Arial", 16))
-        layout.addWidget(label)
-
-        if MATPLOTLIB_AVAILABLE:
-            info = QLabel("FASE 3: Qui verrà integrato PlotDialog da wire_editor.py")
-        else:
-            info = QLabel("⚠️ Matplotlib non disponibile - installare con: pip install matplotlib")
-        info.setAlignment(Qt.AlignCenter)
-        layout.addWidget(info)
+        # Widget 3D
+        self.viz_3d = Visualization3DWidget(self.model)
+        layout.addWidget(self.viz_3d)
 
         self.viz_tab.setLayout(layout)
 
     def setup_reports_tab(self):
-        """Setup tab reports"""
+        """Setup tab reports (integrato)"""
         layout = QVBoxLayout()
 
-        # Placeholder per ora
-        label = QLabel("Reports - Export PDF/Excel, Statistiche")
-        label.setAlignment(Qt.AlignCenter)
-        label.setFont(QFont("Arial", 16))
-        layout.addWidget(label)
+        # Titolo
+        title = QLabel("Reports & Export")
+        title.setFont(QFont("Arial", 14, QFont.Bold))
+        layout.addWidget(title)
 
-        info = QLabel("FASE 3: Export PDF, Excel, statistiche")
-        info.setAlignment(Qt.AlignCenter)
-        layout.addWidget(info)
+        # Export section
+        export_group = QGroupBox("Export Dati")
+        export_layout = QVBoxLayout()
+
+        # Pulsanti export
+        btn_layout = QHBoxLayout()
+
+        btn_csv = QPushButton("📄 Export CSV")
+        btn_csv.clicked.connect(self.export_csv)
+        btn_layout.addWidget(btn_csv)
+
+        btn_excel = QPushButton("📊 Export Excel")
+        btn_excel.clicked.connect(self.export_excel)
+        if not OPENPYXL_AVAILABLE:
+            btn_excel.setEnabled(False)
+            btn_excel.setToolTip("Openpyxl non installato - pip install openpyxl")
+        btn_layout.addWidget(btn_excel)
+
+        btn_pdf = QPushButton("📑 Export PDF Report")
+        btn_pdf.clicked.connect(self.export_pdf_report)
+        if not REPORTLAB_AVAILABLE:
+            btn_pdf.setEnabled(False)
+            btn_pdf.setToolTip("Reportlab non installato - pip install reportlab")
+        btn_layout.addWidget(btn_pdf)
+
+        btn_layout.addStretch()
+
+        export_layout.addLayout(btn_layout)
+        export_group.setLayout(export_layout)
+        layout.addWidget(export_group)
+
+        # Statistiche section
+        stats_group = QGroupBox("Statistiche Progetto")
+        stats_layout = QVBoxLayout()
+
+        self.stats_text = QTextEdit()
+        self.stats_text.setReadOnly(True)
+        self.stats_text.setMaximumHeight(300)
+        stats_layout.addWidget(self.stats_text)
+
+        btn_refresh_stats = QPushButton("🔄 Aggiorna Statistiche")
+        btn_refresh_stats.clicked.connect(self.update_statistics)
+        stats_layout.addWidget(btn_refresh_stats)
+
+        stats_group.setLayout(stats_layout)
+        layout.addWidget(stats_group)
+
+        layout.addStretch()
 
         self.reports_tab.setLayout(layout)
+
+        # Statistiche iniziali
+        self.update_statistics()
 
     def setup_menus(self):
         """Setup menu bar unificato"""
@@ -1614,6 +1838,8 @@ class UnifiedMainWindow(QMainWindow):
         """Callback quando aggiunto nodo"""
         self.refresh_table_view()
         self.canvas_view.refresh()
+        if MATPLOTLIB_AVAILABLE and hasattr(self, 'viz_3d'):
+            self.viz_3d.refresh_plot()
         self.update_status()
         self.update_undo_redo_actions()
 
@@ -1621,6 +1847,8 @@ class UnifiedMainWindow(QMainWindow):
         """Callback quando dati tabella cambiano"""
         self.refresh_table_view()
         self.canvas_view.refresh()
+        if MATPLOTLIB_AVAILABLE and hasattr(self, 'viz_3d'):
+            self.viz_3d.refresh_plot()
         self.update_status()
         self.update_undo_redo_actions()
 
@@ -1642,8 +1870,10 @@ class UnifiedMainWindow(QMainWindow):
         else:
             self.canvas_info_label.setText("Nessuna selezione")
 
-        # Aggiorna anche tabella se modifiche dal canvas
+        # Aggiorna anche tabella e 3D se modifiche dal canvas
         self.refresh_table_view()
+        if MATPLOTLIB_AVAILABLE and hasattr(self, 'viz_3d'):
+            self.viz_3d.refresh_plot()
         self.update_status()
         self.update_undo_redo_actions()
 
@@ -1692,6 +1922,265 @@ class UnifiedMainWindow(QMainWindow):
         else:
             self.bounds_label.setText("")
 
+    # === Reports & Export Methods ===
+
+    def export_csv(self):
+        """Export coordinate CSV"""
+        if not self.model.nodes:
+            QMessageBox.warning(self, "Export CSV", "Nessun nodo da esportare")
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV", "coordinate.csv",
+            "CSV Files (*.csv);;All Files (*)"
+        )
+
+        if filename:
+            try:
+                with open(filename, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['ID', 'X', 'Y', 'Z', 'Livello', 'Descrizione'])
+
+                    for node in self.model.get_node_list():
+                        writer.writerow([
+                            node.id,
+                            f"{node.x:.4f}",
+                            f"{node.y:.4f}",
+                            f"{node.z:.3f}",
+                            node.level,
+                            node.description
+                        ])
+
+                QMessageBox.information(self, "Export CSV",
+                                      f"Esportati {len(self.model.nodes)} nodi in:\n{filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore Export", f"Errore durante export:\n{e}")
+
+    def export_excel(self):
+        """Export coordinate Excel"""
+        if not OPENPYXL_AVAILABLE:
+            QMessageBox.warning(self, "Export Excel",
+                              "Openpyxl non disponibile.\nInstallare con: pip install openpyxl")
+            return
+
+        if not self.model.nodes:
+            QMessageBox.warning(self, "Export Excel", "Nessun nodo da esportare")
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Export Excel", "coordinate.xlsx",
+            "Excel Files (*.xlsx);;All Files (*)"
+        )
+
+        if filename:
+            try:
+                from openpyxl import Workbook
+                from openpyxl.styles import Font as XLFont, PatternFill, Alignment
+
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Coordinate"
+
+                # Header
+                headers = ['ID', 'X (m)', 'Y (m)', 'Z (m)', 'Livello', 'Descrizione']
+                ws.append(headers)
+
+                # Stile header
+                for cell in ws[1]:
+                    cell.font = XLFont(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+                # Dati
+                for node in self.model.get_node_list():
+                    ws.append([
+                        node.id,
+                        round(node.x, 4),
+                        round(node.y, 4),
+                        round(node.z, 3),
+                        node.level,
+                        node.description
+                    ])
+
+                # Formato numeri
+                for row in ws.iter_rows(min_row=2, max_col=4):
+                    for cell in row[1:4]:  # X, Y, Z
+                        cell.number_format = '0.0000' if cell.column in [2, 3] else '0.000'
+                        cell.alignment = Alignment(horizontal="right")
+
+                # Auto-width colonne
+                for column in ws.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    ws.column_dimensions[column_letter].width = min(max_length + 2, 50)
+
+                wb.save(filename)
+                QMessageBox.information(self, "Export Excel",
+                                      f"Esportati {len(self.model.nodes)} nodi in:\n{filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore Export", f"Errore durante export:\n{e}")
+
+    def export_pdf_report(self):
+        """Export PDF report"""
+        if not REPORTLAB_AVAILABLE:
+            QMessageBox.warning(self, "Export PDF",
+                              "Reportlab non disponibile.\nInstallare con: pip install reportlab")
+            return
+
+        if not self.model.nodes:
+            QMessageBox.warning(self, "Export PDF", "Nessun nodo da esportare")
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Export PDF Report", "report.pdf",
+            "PDF Files (*.pdf);;All Files (*)"
+        )
+
+        if filename:
+            try:
+                from reportlab.lib.pagesizes import A4
+                from reportlab.lib import colors
+                from reportlab.lib.units import cm
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib.enums import TA_CENTER
+
+                # Crea documento
+                doc = SimpleDocTemplate(filename, pagesize=A4)
+                story = []
+                styles = getSampleStyleSheet()
+
+                # Titolo
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=18,
+                    textColor=colors.HexColor('#366092'),
+                    spaceAfter=30,
+                    alignment=TA_CENTER
+                )
+                story.append(Paragraph("Report Coordinate Fili Fissi", title_style))
+                story.append(Spacer(1, 0.5*cm))
+
+                # Info progetto
+                info_data = [
+                    ['Progetto:', self.model.metadata.get('project_name', 'N/A')],
+                    ['Località:', self.model.metadata.get('location', 'N/A')],
+                    ['Autore:', self.model.metadata['author']],
+                    ['Data:', datetime.now().strftime('%d/%m/%Y %H:%M')],
+                    ['Totale Nodi:', str(len(self.model.nodes))],
+                    ['Totale Edges:', str(len(self.model.edges))]
+                ]
+
+                info_table = Table(info_data, colWidths=[4*cm, 12*cm])
+                info_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ]))
+                story.append(info_table)
+                story.append(Spacer(1, 1*cm))
+
+                # Tabella coordinate
+                coord_data = [['ID', 'X (m)', 'Y (m)', 'Z (m)', 'Livello', 'Descrizione']]
+                for node in self.model.get_node_list()[:100]:  # Max 100 nodi
+                    coord_data.append([
+                        str(node.id),
+                        f"{node.x:.4f}",
+                        f"{node.y:.4f}",
+                        f"{node.z:.3f}",
+                        node.level,
+                        node.description[:30] if node.description else ''
+                    ])
+
+                coord_table = Table(coord_data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2*cm, 5*cm])
+                coord_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')])
+                ]))
+                story.append(coord_table)
+
+                if len(self.model.nodes) > 100:
+                    story.append(Spacer(1, 0.5*cm))
+                    story.append(Paragraph(f"Nota: Mostrati solo i primi 100 nodi di {len(self.model.nodes)}", styles['Italic']))
+
+                # Build PDF
+                doc.build(story)
+
+                QMessageBox.information(self, "Export PDF",
+                                      f"Report PDF creato:\n{filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore Export", f"Errore durante export PDF:\n{e}")
+
+    def update_statistics(self):
+        """Aggiorna statistiche progetto"""
+        stats = []
+        stats.append("=== STATISTICHE PROGETTO ===\n")
+
+        # Conteggi base
+        stats.append(f"Totale Nodi: {len(self.model.nodes)}")
+        stats.append(f"Totale Edges: {len(self.model.edges)}")
+        stats.append(f"Totale Annotazioni: {len(self.model.annotations)}\n")
+
+        # Livelli
+        levels = self.model.get_levels()
+        if levels:
+            stats.append(f"Livelli presenti ({len(levels)}): {', '.join(levels)}")
+            for level in levels:
+                level_nodes = self.model.get_nodes_by_level(level)
+                stats.append(f"  - {level}: {len(level_nodes)} nodi")
+        else:
+            stats.append("Nessun livello definito")
+
+        stats.append("")
+
+        # Bounds
+        if self.model.nodes:
+            bounds = self.model.get_bounds()
+            stats.append("=== COORDINATE ===")
+            stats.append(f"X: {bounds['x_min']:.2f} ÷ {bounds['x_max']:.2f} (Δ={bounds['x_max']-bounds['x_min']:.2f}m)")
+            stats.append(f"Y: {bounds['y_min']:.2f} ÷ {bounds['y_max']:.2f} (Δ={bounds['y_max']-bounds['y_min']:.2f}m)")
+            stats.append(f"Z: {bounds['z_min']:.2f} ÷ {bounds['z_max']:.2f} (Δ={bounds['z_max']-bounds['z_min']:.2f}m)")
+            stats.append("")
+
+        # Edges stats
+        if self.model.edges:
+            stats.append("=== EDGES ===")
+            lengths = []
+            for edge in self.model.edges.values():
+                n1 = self.model.nodes.get(edge.node1_id)
+                n2 = self.model.nodes.get(edge.node2_id)
+                if n1 and n2:
+                    lengths.append(n1.distance_to(n2))
+
+            if lengths:
+                stats.append(f"Lunghezza minima: {min(lengths):.2f}m")
+                stats.append(f"Lunghezza massima: {max(lengths):.2f}m")
+                stats.append(f"Lunghezza media: {sum(lengths)/len(lengths):.2f}m")
+                stats.append(f"Lunghezza totale: {sum(lengths):.2f}m")
+            stats.append("")
+
+        # Metadata
+        stats.append("=== PROGETTO ===")
+        stats.append(f"Nome: {self.model.metadata.get('project_name', 'N/A')}")
+        stats.append(f"Località: {self.model.metadata.get('location', 'N/A')}")
+        stats.append(f"Creato: {self.model.metadata.get('created', 'N/A')[:19]}")
+        stats.append(f"Modificato: {self.model.metadata.get('modified', 'N/A')[:19]}")
+
+        self.stats_text.setText('\n'.join(stats))
+
     def show_about(self):
         """Mostra informazioni"""
         about_text = f"""WIRE EDITOR UNIFIED v6.0
@@ -1713,7 +2202,7 @@ Openpyxl: {"✓ Disponibile" if OPENPYXL_AVAILABLE else "✗ Non installato"}
 Reportlab: {"✓ Disponibile" if REPORTLAB_AVAILABLE else "✗ Non installato"}
 Ezdxf: {"✓ Disponibile" if EZDXF_AVAILABLE else "✗ Non installato"}
 
-Versione: 6.0-rc (FASE 2 - TableView + CanvasView Integrati)
+Versione: 6.0 (FASE 3 Complete - Production Ready)
 """
         QMessageBox.about(self, "About", about_text)
 
@@ -1725,7 +2214,7 @@ Versione: 6.0-rc (FASE 2 - TableView + CanvasView Integrati)
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Wire Editor Unified")
-    app.setApplicationVersion("6.0-rc")
+    app.setApplicationVersion("6.0")
     app.setOrganizationName("Arch. Michelangelo Bartolotta")
 
     # Stile applicazione
