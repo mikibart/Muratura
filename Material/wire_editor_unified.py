@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wire Editor Unified v6.0
+Wire Editor Unified v6.1
 Applicazione integrata per gestione coordinate fili fissi
 
 Combina funzionalità di:
@@ -1465,7 +1465,7 @@ class UnifiedMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.model = UnifiedModel()
-        self.setWindowTitle("Wire Editor Unified v6.0 - Arch. Michelangelo Bartolotta")
+        self.setWindowTitle("Wire Editor Unified v6.1 - Arch. Michelangelo Bartolotta")
         self.setMinimumSize(1400, 900)
 
         self.setup_ui()
@@ -1617,6 +1617,34 @@ class UnifiedMainWindow(QMainWindow):
         title.setFont(QFont("Arial", 14, QFont.Bold))
         layout.addWidget(title)
 
+        # Import section
+        import_group = QGroupBox("Import Dati")
+        import_layout = QVBoxLayout()
+
+        # Pulsanti import
+        import_btn_layout = QHBoxLayout()
+
+        btn_import_csv = QPushButton("📄 Import CSV")
+        btn_import_csv.clicked.connect(self.import_csv)
+        import_btn_layout.addWidget(btn_import_csv)
+
+        btn_import_excel = QPushButton("📊 Import Excel")
+        btn_import_excel.clicked.connect(self.import_excel)
+        if not OPENPYXL_AVAILABLE:
+            btn_import_excel.setEnabled(False)
+            btn_import_excel.setToolTip("Openpyxl non installato - pip install openpyxl")
+        import_btn_layout.addWidget(btn_import_excel)
+
+        btn_import_dxf = QPushButton("📐 Import DXF")
+        btn_import_dxf.clicked.connect(self.import_dxf)
+        import_btn_layout.addWidget(btn_import_dxf)
+
+        import_btn_layout.addStretch()
+
+        import_layout.addLayout(import_btn_layout)
+        import_group.setLayout(import_layout)
+        layout.addWidget(import_group)
+
         # Export section
         export_group = QGroupBox("Export Dati")
         export_layout = QVBoxLayout()
@@ -1682,6 +1710,14 @@ class UnifiedMainWindow(QMainWindow):
         file_menu.addAction('Open...', self.open_file, 'Ctrl+O')
         file_menu.addAction('Save...', self.save_file, 'Ctrl+S')
         file_menu.addSeparator()
+
+        # Import submenu
+        import_menu = file_menu.addMenu('Import')
+        import_menu.addAction('Import CSV...', self.import_csv)
+        import_menu.addAction('Import Excel...', self.import_excel)
+        import_menu.addAction('Import DXF...', self.import_dxf)
+
+        file_menu.addSeparator()
         file_menu.addAction('Exit', self.close, 'Ctrl+Q')
 
         # Edit menu
@@ -1720,7 +1756,7 @@ class UnifiedMainWindow(QMainWindow):
 
     def setup_statusbar(self):
         """Setup status bar"""
-        self.status_label = QLabel("Ready - Wire Editor Unified v6.0")
+        self.status_label = QLabel("Ready - Wire Editor Unified v6.1")
         self.statusBar().addWidget(self.status_label)
 
         self.node_count_label = QLabel("Nodes: 0")
@@ -2124,6 +2160,399 @@ class UnifiedMainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Errore Export", f"Errore durante export PDF:\n{e}")
 
+    # === Import Methods ===
+
+    def import_csv(self):
+        """Import coordinate da file CSV"""
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Import CSV", "",
+            "CSV Files (*.csv);;All Files (*)"
+        )
+
+        if not filename:
+            return
+
+        try:
+            imported = 0
+            errors = []
+
+            with open(filename, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                header = next(reader, None)  # Skip header
+
+                if not header:
+                    QMessageBox.warning(self, "Import CSV", "File CSV vuoto")
+                    return
+
+                for row_num, row in enumerate(reader, start=2):
+                    if len(row) < 3:  # Almeno X, Y, Z richiesti
+                        errors.append(f"Riga {row_num}: dati insufficienti")
+                        continue
+
+                    try:
+                        # ID opzionale (se non presente, auto-genera)
+                        node_id = None
+                        x_idx = 0
+                        if len(row) >= 6:  # Formato completo: ID, X, Y, Z, Livello, Descrizione
+                            try:
+                                node_id = int(row[0])
+                                x_idx = 1
+                            except ValueError:
+                                pass  # ID non valido, auto-genera
+
+                        # Coordinate (obbligatorie)
+                        x = float(row[x_idx])
+                        y = float(row[x_idx + 1])
+                        z = float(row[x_idx + 2])
+
+                        # Dati opzionali
+                        level = row[x_idx + 3] if len(row) > x_idx + 3 else ""
+                        description = row[x_idx + 4] if len(row) > x_idx + 4 else ""
+
+                        # Crea nodo con Command pattern
+                        if node_id is not None and node_id in self.model.nodes:
+                            errors.append(f"Riga {row_num}: ID {node_id} già esistente")
+                            continue
+
+                        node = Node(
+                            id=node_id if node_id is not None else self.model.next_node_id,
+                            x=x, y=y, z=z,
+                            level=level,
+                            description=description
+                        )
+
+                        cmd = CreateNodeCommand(self.model, node)
+                        self.model.execute_command(cmd)
+                        imported += 1
+
+                    except (ValueError, IndexError) as e:
+                        errors.append(f"Riga {row_num}: {str(e)}")
+                        continue
+
+            # Aggiorna tutte le viste
+            self.refresh_all_views()
+            self.update_status()
+            self.update_undo_redo_actions()
+
+            # Messaggio risultato
+            msg = f"Importati {imported} nodi da CSV"
+            if errors:
+                msg += f"\n\nErrori ({len(errors)}):\n" + "\n".join(errors[:10])
+                if len(errors) > 10:
+                    msg += f"\n... e altri {len(errors) - 10} errori"
+                QMessageBox.warning(self, "Import CSV", msg)
+            else:
+                QMessageBox.information(self, "Import CSV", msg)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Errore Import", f"Errore durante import CSV:\n{e}")
+
+    def import_excel(self):
+        """Import coordinate da file Excel"""
+        if not OPENPYXL_AVAILABLE:
+            QMessageBox.warning(self, "Import Excel",
+                              "Openpyxl non disponibile.\nInstallare con: pip install openpyxl")
+            return
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Import Excel", "",
+            "Excel Files (*.xlsx);;All Files (*)"
+        )
+
+        if not filename:
+            return
+
+        try:
+            from openpyxl import load_workbook
+
+            wb = load_workbook(filename, data_only=True)
+
+            # Cerca foglio "Coordinate" o usa il primo
+            if "Coordinate" in wb.sheetnames:
+                ws = wb["Coordinate"]
+            else:
+                ws = wb.active
+
+            imported = 0
+            errors = []
+
+            # Salta header (riga 1)
+            for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                if not row or all(cell is None for cell in row):
+                    continue
+
+                if len(row) < 3:
+                    errors.append(f"Riga {row_num}: dati insufficienti")
+                    continue
+
+                try:
+                    # ID opzionale
+                    node_id = None
+                    x_idx = 0
+                    if len(row) >= 6:
+                        try:
+                            if row[0] is not None:
+                                node_id = int(row[0])
+                                x_idx = 1
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Coordinate
+                    x = float(row[x_idx]) if row[x_idx] is not None else 0.0
+                    y = float(row[x_idx + 1]) if row[x_idx + 1] is not None else 0.0
+                    z = float(row[x_idx + 2]) if row[x_idx + 2] is not None else 0.0
+
+                    # Dati opzionali
+                    level = str(row[x_idx + 3]) if len(row) > x_idx + 3 and row[x_idx + 3] is not None else ""
+                    description = str(row[x_idx + 4]) if len(row) > x_idx + 4 and row[x_idx + 4] is not None else ""
+
+                    # Crea nodo
+                    if node_id is not None and node_id in self.model.nodes:
+                        errors.append(f"Riga {row_num}: ID {node_id} già esistente")
+                        continue
+
+                    node = Node(
+                        id=node_id if node_id is not None else self.model.next_node_id,
+                        x=x, y=y, z=z,
+                        level=level,
+                        description=description
+                    )
+
+                    cmd = CreateNodeCommand(self.model, node)
+                    self.model.execute_command(cmd)
+                    imported += 1
+
+                except (ValueError, TypeError, IndexError) as e:
+                    errors.append(f"Riga {row_num}: {str(e)}")
+                    continue
+
+            wb.close()
+
+            # Aggiorna tutte le viste
+            self.refresh_all_views()
+            self.update_status()
+            self.update_undo_redo_actions()
+
+            # Messaggio risultato
+            msg = f"Importati {imported} nodi da Excel"
+            if errors:
+                msg += f"\n\nErrori ({len(errors)}):\n" + "\n".join(errors[:10])
+                if len(errors) > 10:
+                    msg += f"\n... e altri {len(errors) - 10} errori"
+                QMessageBox.warning(self, "Import Excel", msg)
+            else:
+                QMessageBox.information(self, "Import Excel", msg)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Errore Import", f"Errore durante import Excel:\n{e}")
+
+    def import_dxf(self):
+        """Import coordinate da file DXF (AutoCAD)"""
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Import DXF", "",
+            "DXF Files (*.dxf);;All Files (*)"
+        )
+
+        if not filename:
+            return
+
+        try:
+            imported = 0
+
+            if EZDXF_AVAILABLE:
+                # Import avanzato con ezdxf
+                try:
+                    doc = ezdxf.readfile(filename)
+                    msp = doc.modelspace()
+
+                    # Leggi POINT entities
+                    for entity in msp.query('POINT'):
+                        location = entity.dxf.location
+                        x, y, z = location.x, location.y, location.z
+                        level = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
+                        description = "DXF Point"
+
+                        node = Node(
+                            id=self.model.next_node_id,
+                            x=x, y=y, z=z,
+                            level=level,
+                            description=description
+                        )
+                        cmd = CreateNodeCommand(self.model, node)
+                        self.model.execute_command(cmd)
+                        imported += 1
+
+                    # Leggi TEXT entities come descrizioni di punti
+                    text_entities = list(msp.query('TEXT'))
+                    for text_entity in text_entities:
+                        insert = text_entity.dxf.insert
+                        text_content = text_entity.dxf.text
+                        x, y, z = insert.x, insert.y, insert.z
+                        level = text_entity.dxf.layer if hasattr(text_entity.dxf, 'layer') else ""
+
+                        # Cerca se esiste già un punto molto vicino
+                        point_exists = False
+                        for node in self.model.nodes.values():
+                            dist = math.sqrt((node.x - x)**2 + (node.y - y)**2 + (node.z - z)**2)
+                            if dist < 0.01:  # Stesso punto
+                                # Aggiorna descrizione se è ancora "DXF Point"
+                                if not node.description or node.description == "DXF Point":
+                                    node.description = text_content
+                                point_exists = True
+                                break
+
+                        if not point_exists:
+                            node = Node(
+                                id=self.model.next_node_id,
+                                x=x, y=y, z=z,
+                                level=level,
+                                description=text_content
+                            )
+                            cmd = CreateNodeCommand(self.model, node)
+                            self.model.execute_command(cmd)
+                            imported += 1
+
+                    # Leggi INSERT entities (blocchi) come punti
+                    for entity in msp.query('INSERT'):
+                        insert = entity.dxf.insert
+                        x, y, z = insert.x, insert.y, insert.z
+                        block_name = entity.dxf.name
+                        level = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
+
+                        node = Node(
+                            id=self.model.next_node_id,
+                            x=x, y=y, z=z,
+                            level=level,
+                            description=f"Block: {block_name}"
+                        )
+                        cmd = CreateNodeCommand(self.model, node)
+                        self.model.execute_command(cmd)
+                        imported += 1
+
+                except Exception as e:
+                    # Fallback a parser manuale
+                    QMessageBox.warning(self, "Import DXF",
+                                      f"Ezdxf fallito, uso parser manuale.\nErrore: {e}")
+                    imported = self._import_dxf_manual(filename)
+
+            else:
+                # Parser DXF manuale (fallback)
+                imported = self._import_dxf_manual(filename)
+
+            # Aggiorna tutte le viste
+            self.refresh_all_views()
+            self.update_status()
+            self.update_undo_redo_actions()
+
+            msg = f"Importati {imported} nodi da DXF"
+            if not EZDXF_AVAILABLE:
+                msg += "\n\nNota: Ezdxf non disponibile, usato parser manuale.\nInstallare con: pip install ezdxf"
+
+            QMessageBox.information(self, "Import DXF", msg)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Errore Import", f"Errore durante import DXF:\n{e}")
+
+    def _import_dxf_manual(self, filename: str) -> int:
+        """Parser DXF manuale (fallback se ezdxf non disponibile)"""
+        imported = 0
+
+        with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+
+            # Cerca entità POINT
+            if line == 'POINT':
+                x, y, z = 0.0, 0.0, 0.0
+                layer = ""
+                # Leggi coordinate gruppo code 10, 20, 30
+                j = i + 1
+                while j < len(lines) and j < i + 50:
+                    code = lines[j].strip()
+                    if j + 1 < len(lines):
+                        value = lines[j + 1].strip()
+                        if code == '8':  # Layer
+                            layer = value
+                        elif code == '10':  # X
+                            try:
+                                x = float(value)
+                            except:
+                                pass
+                        elif code == '20':  # Y
+                            try:
+                                y = float(value)
+                            except:
+                                pass
+                        elif code == '30':  # Z
+                            try:
+                                z = float(value)
+                            except:
+                                pass
+                        elif code == '0':  # Nuova entità
+                            break
+                    j += 2
+
+                node = Node(
+                    id=self.model.next_node_id,
+                    x=x, y=y, z=z,
+                    level=layer,
+                    description="DXF Point"
+                )
+                cmd = CreateNodeCommand(self.model, node)
+                self.model.execute_command(cmd)
+                imported += 1
+
+            # Cerca entità TEXT
+            elif line == 'TEXT':
+                x, y, z = 0.0, 0.0, 0.0
+                text_content = ""
+                layer = ""
+                j = i + 1
+                while j < len(lines) and j < i + 50:
+                    code = lines[j].strip()
+                    if j + 1 < len(lines):
+                        value = lines[j + 1].strip()
+                        if code == '8':  # Layer
+                            layer = value
+                        elif code == '10':  # X
+                            try:
+                                x = float(value)
+                            except:
+                                pass
+                        elif code == '20':  # Y
+                            try:
+                                y = float(value)
+                            except:
+                                pass
+                        elif code == '30':  # Z
+                            try:
+                                z = float(value)
+                            except:
+                                pass
+                        elif code == '1':  # Testo
+                            text_content = value
+                        elif code == '0':  # Nuova entità
+                            break
+                    j += 2
+
+                if text_content:
+                    node = Node(
+                        id=self.model.next_node_id,
+                        x=x, y=y, z=z,
+                        level=layer,
+                        description=text_content
+                    )
+                    cmd = CreateNodeCommand(self.model, node)
+                    self.model.execute_command(cmd)
+                    imported += 1
+
+            i += 1
+
+        return imported
+
     def update_statistics(self):
         """Aggiorna statistiche progetto"""
         stats = []
@@ -2183,7 +2612,7 @@ class UnifiedMainWindow(QMainWindow):
 
     def show_about(self):
         """Mostra informazioni"""
-        about_text = f"""WIRE EDITOR UNIFIED v6.0
+        about_text = f"""WIRE EDITOR UNIFIED v6.1
 
 Applicazione integrata per gestione coordinate fili fissi
 e design topologie strutturali.
@@ -2202,7 +2631,7 @@ Openpyxl: {"✓ Disponibile" if OPENPYXL_AVAILABLE else "✗ Non installato"}
 Reportlab: {"✓ Disponibile" if REPORTLAB_AVAILABLE else "✗ Non installato"}
 Ezdxf: {"✓ Disponibile" if EZDXF_AVAILABLE else "✗ Non installato"}
 
-Versione: 6.0 (FASE 3 Complete - Production Ready)
+Versione: 6.1 (Import Features Complete - CSV, Excel, DXF)
 """
         QMessageBox.about(self, "About", about_text)
 
@@ -2214,7 +2643,7 @@ Versione: 6.0 (FASE 3 Complete - Production Ready)
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Wire Editor Unified")
-    app.setApplicationVersion("6.0")
+    app.setApplicationVersion("6.1")
     app.setOrganizationName("Arch. Michelangelo Bartolotta")
 
     # Stile applicazione
