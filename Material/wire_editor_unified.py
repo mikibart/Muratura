@@ -1400,7 +1400,8 @@ class CoordinateTable(QTableWidget):
             self.setItem(row, 5, QTableWidgetItem(node.description))
 
         self.blockSignals(False)
-        self.data_changed.emit()
+        # Non emettere data_changed qui - causa ricorsione infinita
+        # Il segnale viene emesso solo in on_cell_changed quando dati effettivamente cambiano
 
     def on_cell_changed(self, row: int, col: int):
         """Gestisce modifiche dirette in tabella usando Command pattern"""
