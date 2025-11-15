@@ -25,6 +25,14 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
+# Openpyxl imports (opzionali)
+try:
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
 
 class Point:
     """Punto con coordinate spaziali"""
@@ -298,22 +306,155 @@ class CoordinateModel:
     def from_dict(self, data):
         """Importa da JSON"""
         self.clear()
-        
+
         if "metadata" in data:
             self.metadata.update(data["metadata"])
-        
+
         if "points" in data:
             for point_data in data["points"]:
                 point = Point.from_dict(point_data)
                 self.points[point.id] = point
-        
+
         self.next_id = data.get("next_id", 1)
-        
+
         # Correggi ID se necessario
         if self.points:
             max_id = max(self.points.keys())
             if max_id >= self.next_id:
                 self.next_id = max_id + 1
+
+    def export_excel(self, filename):
+        """Esporta coordinate in formato Excel (.xlsx)"""
+        if not OPENPYXL_AVAILABLE:
+            raise ImportError("openpyxl non disponibile. Installare con: pip install openpyxl")
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Coordinate Fili Fissi"
+
+        # Stili
+        header_font = Font(bold=True, color="FFFFFF", size=12)
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+
+        # Headers
+        headers = ["ID", "X (m)", "Y (m)", "Z (m)", "Livello", "Descrizione"]
+        for col, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = border
+
+        # Dati punti
+        for row_idx, point in enumerate(self.get_point_list(), start=2):
+            ws.cell(row=row_idx, column=1, value=point.id).border = border
+            ws.cell(row=row_idx, column=2, value=point.x).border = border
+            ws.cell(row=row_idx, column=2, value=point.x).number_format = '0.0000'
+            ws.cell(row=row_idx, column=3, value=point.y).border = border
+            ws.cell(row=row_idx, column=3, value=point.y).number_format = '0.0000'
+            ws.cell(row=row_idx, column=4, value=point.z).border = border
+            ws.cell(row=row_idx, column=4, value=point.z).number_format = '0.000'
+            ws.cell(row=row_idx, column=5, value=point.level).border = border
+            ws.cell(row=row_idx, column=6, value=point.description).border = border
+
+        # Larghezza colonne
+        ws.column_dimensions['A'].width = 8
+        ws.column_dimensions['B'].width = 14
+        ws.column_dimensions['C'].width = 14
+        ws.column_dimensions['D'].width = 12
+        ws.column_dimensions['E'].width = 12
+        ws.column_dimensions['F'].width = 30
+
+        # Foglio Metadata
+        ws_meta = wb.create_sheet("Info Progetto")
+        ws_meta.column_dimensions['A'].width = 20
+        ws_meta.column_dimensions['B'].width = 50
+
+        meta_data = [
+            ("Progetto", self.metadata.get('project_name', '')),
+            ("Località", self.metadata.get('location', '')),
+            ("Autore", self.metadata.get('author', '')),
+            ("Registrazione", self.metadata.get('registration', '')),
+            ("Tipo", self.metadata.get('project_type', '')),
+            ("Creato", self.metadata.get('created', '')),
+            ("Modificato", self.metadata.get('modified', '')),
+            ("Note", self.metadata.get('notes', ''))
+        ]
+
+        for row_idx, (key, value) in enumerate(meta_data, start=1):
+            cell_key = ws_meta.cell(row=row_idx, column=1, value=key)
+            cell_key.font = Font(bold=True)
+            ws_meta.cell(row=row_idx, column=2, value=value)
+
+        # Statistiche
+        ws_stats = wb.create_sheet("Statistiche")
+        ws_stats.column_dimensions['A'].width = 25
+        ws_stats.column_dimensions['B'].width = 15
+
+        bounds = self.get_bounds() if self.points else None
+        if bounds:
+            stats_data = [
+                ("STATISTICHE COORDINATE", ""),
+                ("Totale punti", len(self.points)),
+                ("", ""),
+                ("X min (m)", f"{bounds['x_min']:.4f}"),
+                ("X max (m)", f"{bounds['x_max']:.4f}"),
+                ("Range X (m)", f"{bounds['x_max'] - bounds['x_min']:.4f}"),
+                ("", ""),
+                ("Y min (m)", f"{bounds['y_min']:.4f}"),
+                ("Y max (m)", f"{bounds['y_max']:.4f}"),
+                ("Range Y (m)", f"{bounds['y_max'] - bounds['y_min']:.4f}"),
+                ("", ""),
+                ("Z min (m)", f"{bounds['z_min']:.3f}"),
+                ("Z max (m)", f"{bounds['z_max']:.3f}"),
+                ("Range Z (m)", f"{bounds['z_max'] - bounds['z_min']:.3f}"),
+            ]
+
+            for row_idx, (key, value) in enumerate(stats_data, start=1):
+                cell_key = ws_stats.cell(row=row_idx, column=1, value=key)
+                if key and not value:
+                    cell_key.font = Font(bold=True, size=12)
+                ws_stats.cell(row=row_idx, column=2, value=value)
+
+        wb.save(filename)
+
+    def import_excel(self, filename):
+        """Importa coordinate da file Excel (.xlsx)"""
+        if not OPENPYXL_AVAILABLE:
+            raise ImportError("openpyxl non disponibile. Installare con: pip install openpyxl")
+
+        wb = load_workbook(filename, data_only=True)
+        ws = wb.active
+
+        imported = 0
+        # Salta header (riga 1)
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            try:
+                # row = (ID, X, Y, Z, Livello, Descrizione)
+                if row[1] is None or row[2] is None:  # X e Y obbligatori
+                    continue
+
+                x = float(row[1])
+                y = float(row[2])
+                z = float(row[3]) if row[3] is not None else 0.0
+                level = str(row[4]) if row[4] else ""
+                description = str(row[5]) if row[5] else ""
+
+                self.add_point(x, y, z, description, level)
+                imported += 1
+
+            except (ValueError, TypeError, IndexError):
+                continue
+
+        wb.close()
+        return imported
 
 
 class MetadataDialog(QDialog):
@@ -846,6 +987,10 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction('Importa CSV...', self.import_csv)
         file_menu.addAction('Esporta CSV...', self.export_csv)
+        file_menu.addSeparator()
+        file_menu.addAction('Importa Excel...', self.import_excel)
+        file_menu.addAction('Esporta Excel...', self.export_excel)
+        file_menu.addSeparator()
         file_menu.addAction('Esporta DXF...', self.export_dxf)
         file_menu.addSeparator()
         file_menu.addAction('Informazioni Progetto...', self.edit_metadata, 'Ctrl+I')
@@ -1041,6 +1186,65 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Errore Esportazione",
                                    f"Impossibile esportare CSV:\n{e}")
+
+    def import_excel(self):
+        """Importa coordinate da file Excel"""
+        if not OPENPYXL_AVAILABLE:
+            reply = QMessageBox.question(
+                self, "Openpyxl Non Disponibile",
+                "La libreria openpyxl non è installata.\n\nVuoi installare openpyxl ora?\n\nEsegui: pip install openpyxl",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                QMessageBox.information(self, "Installazione",
+                                      "Apri un terminale ed esegui:\n\npip install openpyxl\n\nPoi riavvia l'applicazione.")
+            return
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Importa Excel", "",
+            "File Excel (*.xlsx);;Tutti i file (*)"
+        )
+
+        if filename:
+            try:
+                imported = self.model.import_excel(filename)
+                self.refresh_display()
+                QMessageBox.information(self, "Importazione Completata",
+                                      f"{imported} punti importati da:\n{filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore Importazione",
+                                   f"Impossibile importare Excel:\n{e}")
+
+    def export_excel(self):
+        """Esporta coordinate in formato Excel"""
+        if not OPENPYXL_AVAILABLE:
+            reply = QMessageBox.question(
+                self, "Openpyxl Non Disponibile",
+                "La libreria openpyxl non è installata.\n\nVuoi installare openpyxl ora?\n\nEsegui: pip install openpyxl",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                QMessageBox.information(self, "Installazione",
+                                      "Apri un terminale ed esegui:\n\npip install openpyxl\n\nPoi riavvia l'applicazione.")
+            return
+
+        if not self.model.points:
+            QMessageBox.warning(self, "Attenzione", "Nessuna coordinata da esportare")
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Esporta Excel", "coordinate_fili_fissi.xlsx",
+            "File Excel (*.xlsx);;Tutti i file (*)"
+        )
+
+        if filename:
+            try:
+                self.model.export_excel(filename)
+                QMessageBox.information(self, "Esportazione Completata",
+                                      f"Excel esportato in:\n{filename}\n\nIl file contiene 3 fogli:\n• Coordinate Fili Fissi\n• Info Progetto\n• Statistiche")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore Esportazione",
+                                   f"Impossibile esportare Excel:\n{e}")
 
     def export_dxf(self):
         """Esporta coordinate in formato DXF (semplificato)"""
@@ -1691,6 +1895,7 @@ Y centro: {sum(y_coords)/len(y_coords):.4f} m
     def show_about(self):
         """Informazioni sull'applicazione"""
         matplotlib_status = "✓ Disponibile" if MATPLOTLIB_AVAILABLE else "✗ Non installato"
+        openpyxl_status = "✓ Disponibile" if OPENPYXL_AVAILABLE else "✗ Non installato"
 
         about_text = f"""INPUT COORDINATE FILI FISSI
 
@@ -1704,7 +1909,7 @@ Ordine Architetti Agrigento n. 1557
 Funzionalità Base:
 • Input rapido coordinate X, Y, Z con livelli
 • Modifica diretta in tabella (6 colonne)
-• Import/Export: JSON, CSV, DXF
+• Import/Export: JSON, CSV, Excel (.xlsx), DXF
 • Calcolo distanze tra punti (2D/3D)
 • Rilevamento punti duplicati
 
@@ -1736,9 +1941,17 @@ Visualizzazione:
 • Colori per livelli, etichette
 • Export immagini PNG ad alta risoluzione
 
-Matplotlib: {matplotlib_status}
+Export Excel:
+• File multi-foglio con formattazione professionale
+• Foglio Coordinate con stili e bordi
+• Foglio Info Progetto con metadata
+• Foglio Statistiche automatiche
 
-Versione: 4.5 - Completa BIM+CAD
+Librerie Opzionali:
+Matplotlib: {matplotlib_status}
+Openpyxl: {openpyxl_status}
+
+Versione: 5.0 - Excel Integration
 """
         QMessageBox.about(self, "Informazioni", about_text)
 
@@ -1746,7 +1959,7 @@ Versione: 4.5 - Completa BIM+CAD
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Input Coordinate Fili Fissi")
-    app.setApplicationVersion("4.5")
+    app.setApplicationVersion("5.0")
     
     # Stile applicazione
     app.setStyleSheet("""
