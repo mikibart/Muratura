@@ -46,6 +46,13 @@ try:
 except ImportError:
     REPORTLAB_AVAILABLE = False
 
+# Ezdxf imports (opzionali - per import DXF avanzato)
+try:
+    import ezdxf
+    EZDXF_AVAILABLE = True
+except ImportError:
+    EZDXF_AVAILABLE = False
+
 
 class Command:
     """Classe base per comandi Undo/Redo"""
@@ -666,6 +673,146 @@ class CoordinateModel:
         wb.close()
         return imported
 
+    def import_dxf(self, filename):
+        """Importa coordinate da file DXF (AutoCAD)"""
+        imported = 0
+
+        if EZDXF_AVAILABLE:
+            # Import avanzato con ezdxf
+            try:
+                doc = ezdxf.readfile(filename)
+                msp = doc.modelspace()
+
+                # Leggi POINT entities
+                for entity in msp.query('POINT'):
+                    location = entity.dxf.location
+                    x, y, z = location.x, location.y, location.z
+                    # Usa layer come livello se disponibile
+                    level = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
+                    description = f"DXF Point"
+                    self.add_point(x, y, z, description, level)
+                    imported += 1
+
+                # Leggi TEXT entities come descrizioni di punti
+                text_entities = list(msp.query('TEXT'))
+                for text_entity in text_entities:
+                    insert = text_entity.dxf.insert
+                    text_content = text_entity.dxf.text
+                    x, y, z = insert.x, insert.y, insert.z
+                    level = text_entity.dxf.layer if hasattr(text_entity.dxf, 'layer') else ""
+                    # Cerca se esiste già un punto molto vicino
+                    point_exists = False
+                    for p in self.points.values():
+                        dist = math.sqrt((p.x - x)**2 + (p.y - y)**2 + (p.z - z)**2)
+                        if dist < 0.01:  # Stesso punto
+                            # Aggiorna descrizione
+                            if not p.description or p.description == "DXF Point":
+                                p.description = text_content
+                            point_exists = True
+                            break
+
+                    if not point_exists:
+                        self.add_point(x, y, z, text_content, level)
+                        imported += 1
+
+                # Leggi INSERT entities (blocchi) come punti
+                for entity in msp.query('INSERT'):
+                    insert = entity.dxf.insert
+                    x, y, z = insert.x, insert.y, insert.z
+                    block_name = entity.dxf.name
+                    level = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
+                    self.add_point(x, y, z, f"Block: {block_name}", level)
+                    imported += 1
+
+                return imported
+
+            except Exception as e:
+                # Fallback a parser manuale
+                pass
+
+        # Parser DXF manuale (fallback se ezdxf non disponibile o fallisce)
+        with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+
+            # Cerca entità POINT
+            if line == 'POINT':
+                x, y, z = 0.0, 0.0, 0.0
+                layer = ""
+                # Leggi coordinate gruppo code 10, 20, 30
+                j = i + 1
+                while j < len(lines) and j < i + 50:  # Limita ricerca
+                    code = lines[j].strip()
+                    if j + 1 < len(lines):
+                        value = lines[j + 1].strip()
+                        if code == '8':  # Layer
+                            layer = value
+                        elif code == '10':  # X
+                            try:
+                                x = float(value)
+                            except:
+                                pass
+                        elif code == '20':  # Y
+                            try:
+                                y = float(value)
+                            except:
+                                pass
+                        elif code == '30':  # Z
+                            try:
+                                z = float(value)
+                            except:
+                                pass
+                        elif code == '0':  # Nuova entità
+                            break
+                    j += 2
+
+                self.add_point(x, y, z, "DXF Point", layer)
+                imported += 1
+
+            # Cerca entità TEXT
+            elif line == 'TEXT':
+                x, y, z = 0.0, 0.0, 0.0
+                text_content = ""
+                layer = ""
+                j = i + 1
+                while j < len(lines) and j < i + 50:
+                    code = lines[j].strip()
+                    if j + 1 < len(lines):
+                        value = lines[j + 1].strip()
+                        if code == '8':  # Layer
+                            layer = value
+                        elif code == '10':  # X
+                            try:
+                                x = float(value)
+                            except:
+                                pass
+                        elif code == '20':  # Y
+                            try:
+                                y = float(value)
+                            except:
+                                pass
+                        elif code == '30':  # Z
+                            try:
+                                z = float(value)
+                            except:
+                                pass
+                        elif code == '1':  # Testo
+                            text_content = value
+                        elif code == '0':  # Nuova entità
+                            break
+                    j += 2
+
+                if text_content:
+                    self.add_point(x, y, z, text_content, layer)
+                    imported += 1
+
+            i += 1
+
+        return imported
+
     def generate_pdf_report(self, filename):
         """Genera report PDF completo con coordinate e statistiche"""
         if not REPORTLAB_AVAILABLE:
@@ -909,6 +1056,73 @@ class MetadataDialog(QDialog):
         return self.metadata
 
 
+class Annotation:
+    """Classe base per annotazioni grafiche"""
+    def __init__(self, annotation_type, color='red', linewidth=2):
+        self.type = annotation_type
+        self.color = color
+        self.linewidth = linewidth
+
+    def to_dict(self):
+        return {
+            'type': self.type,
+            'color': self.color,
+            'linewidth': self.linewidth
+        }
+
+
+class LineAnnotation(Annotation):
+    """Annotazione linea tra due punti"""
+    def __init__(self, p1_id, p2_id, color='red', linewidth=2, style='solid'):
+        super().__init__('line', color, linewidth)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.style = style  # 'solid', 'dashed', 'dotted'
+
+    def to_dict(self):
+        data = super().to_dict()
+        data.update({
+            'p1_id': self.p1_id,
+            'p2_id': self.p2_id,
+            'style': self.style
+        })
+        return data
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(data['p1_id'], data['p2_id'],
+                  data.get('color', 'red'),
+                  data.get('linewidth', 2),
+                  data.get('style', 'solid'))
+
+
+class DimensionAnnotation(Annotation):
+    """Annotazione quota/dimensione tra due punti"""
+    def __init__(self, p1_id, p2_id, offset=0.5, color='blue', show_text=True):
+        super().__init__('dimension', color, 1)
+        self.p1_id = p1_id
+        self.p2_id = p2_id
+        self.offset = offset  # Offset della linea di quota
+        self.show_text = show_text
+
+    def to_dict(self):
+        data = super().to_dict()
+        data.update({
+            'p1_id': self.p1_id,
+            'p2_id': self.p2_id,
+            'offset': self.offset,
+            'show_text': self.show_text
+        })
+        return data
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(data['p1_id'], data['p2_id'],
+                  data.get('offset', 0.5),
+                  data.get('color', 'blue'),
+                  data.get('show_text', True))
+
+
 class PlotDialog(QDialog):
     """Dialog per visualizzazione grafica 2D/3D dei punti"""
 
@@ -917,6 +1131,7 @@ class PlotDialog(QDialog):
         self.model = model
         self.setWindowTitle("Vista Grafica Coordinate")
         self.setMinimumSize(900, 700)
+        self.annotations = []  # Lista annotazioni
         self.setup_ui()
 
     def setup_ui(self):
@@ -966,6 +1181,25 @@ class PlotDialog(QDialog):
 
         controls.addStretch()
         layout.addLayout(controls)
+
+        # Toolbar annotazioni
+        annot_layout = QHBoxLayout()
+        annot_layout.addWidget(QLabel("Annotazioni:"))
+
+        add_line_btn = QPushButton("Aggiungi Linea")
+        add_line_btn.clicked.connect(self.add_line_annotation)
+        annot_layout.addWidget(add_line_btn)
+
+        add_dim_btn = QPushButton("Aggiungi Quota")
+        add_dim_btn.clicked.connect(self.add_dimension_annotation)
+        annot_layout.addWidget(add_dim_btn)
+
+        clear_annot_btn = QPushButton("Pulisci Annotazioni")
+        clear_annot_btn.clicked.connect(self.clear_annotations)
+        annot_layout.addWidget(clear_annot_btn)
+
+        annot_layout.addStretch()
+        layout.addLayout(annot_layout)
 
         # Canvas matplotlib
         self.figure = Figure(figsize=(10, 8))
@@ -1068,6 +1302,89 @@ class PlotDialog(QDialog):
                              for level in levels]
             ax.legend(handles=legend_elements, loc='best', fontsize=9)
 
+        # Renderizza annotazioni
+        self.render_annotations_2d(ax, view_type)
+
+    def render_annotations_2d(self, ax, view_type):
+        """Renderizza annotazioni grafiche nel plot 2D"""
+        for annot in self.annotations:
+            if isinstance(annot, LineAnnotation):
+                # Disegna linea
+                if annot.p1_id in self.model.points and annot.p2_id in self.model.points:
+                    p1 = self.model.points[annot.p1_id]
+                    p2 = self.model.points[annot.p2_id]
+
+                    # Seleziona coordinate corrette per vista
+                    if "XY" in view_type:
+                        x1, y1 = p1.x, p1.y
+                        x2, y2 = p2.x, p2.y
+                    elif "XZ" in view_type:
+                        x1, y1 = p1.x, p1.z
+                        x2, y2 = p2.x, p2.z
+                    else:  # YZ
+                        x1, y1 = p1.y, p1.z
+                        x2, y2 = p2.y, p2.z
+
+                    linestyle = '--' if annot.style == 'dashed' else (':' if annot.style == 'dotted' else '-')
+                    ax.plot([x1, x2], [y1, y2], color=annot.color,
+                           linewidth=annot.linewidth, linestyle=linestyle, alpha=0.7)
+
+            elif isinstance(annot, DimensionAnnotation):
+                # Disegna quota
+                if annot.p1_id in self.model.points and annot.p2_id in self.model.points:
+                    p1 = self.model.points[annot.p1_id]
+                    p2 = self.model.points[annot.p2_id]
+
+                    # Coordinate per vista
+                    if "XY" in view_type:
+                        x1, y1 = p1.x, p1.y
+                        x2, y2 = p2.x, p2.y
+                    elif "XZ" in view_type:
+                        x1, y1 = p1.x, p1.z
+                        x2, y2 = p2.x, p2.z
+                    else:  # YZ
+                        x1, y1 = p1.y, p1.z
+                        x2, y2 = p2.y, p2.z
+
+                    # Calcola direzione perpendicolare per offset
+                    dx = x2 - x1
+                    dy = y2 - y1
+                    length = math.sqrt(dx**2 + dy**2)
+
+                    if length > 0:
+                        # Vettore perpendicolare normalizzato
+                        perp_x = -dy / length * annot.offset
+                        perp_y = dx / length * annot.offset
+
+                        # Linea di quota offset
+                        ox1, oy1 = x1 + perp_x, y1 + perp_y
+                        ox2, oy2 = x2 + perp_x, y2 + perp_y
+
+                        # Disegna linea di quota
+                        ax.plot([ox1, ox2], [oy1, oy2], color=annot.color,
+                               linewidth=1, linestyle='-', alpha=0.7)
+
+                        # Linee di estensione
+                        ax.plot([x1, ox1], [y1, oy1], color=annot.color,
+                               linewidth=0.5, linestyle=':', alpha=0.5)
+                        ax.plot([x2, ox2], [y2, oy2], color=annot.color,
+                               linewidth=0.5, linestyle=':', alpha=0.5)
+
+                        # Frecce alle estremità
+                        ax.annotate('', xy=(ox1, oy1), xytext=(ox1 + dx * 0.05, oy1 + dy * 0.05),
+                                   arrowprops=dict(arrowstyle='<-', color=annot.color, lw=1))
+                        ax.annotate('', xy=(ox2, oy2), xytext=(ox2 - dx * 0.05, oy2 - dy * 0.05),
+                                   arrowprops=dict(arrowstyle='<-', color=annot.color, lw=1))
+
+                        # Testo con dimensione
+                        if annot.show_text:
+                            mid_x = (ox1 + ox2) / 2
+                            mid_y = (oy1 + oy2) / 2
+                            ax.text(mid_x, mid_y, f'{length:.3f}m',
+                                   fontsize=9, color=annot.color, fontweight='bold',
+                                   ha='center', va='bottom',
+                                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
     def plot_3d(self, ax, points):
         """Plot 3D"""
         levels = list(set(p.level for p in points if p.level))
@@ -1114,6 +1431,116 @@ class PlotDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(self, "Errore Esportazione",
                                    f"Impossibile esportare immagine:\n{e}")
+
+    def add_line_annotation(self):
+        """Aggiungi annotazione linea tra due punti"""
+        if len(self.model.points) < 2:
+            QMessageBox.warning(self, "Attenzione", "Servono almeno 2 punti per creare una linea")
+            return
+
+        # Lista ID punti
+        point_ids = [str(p.id) for p in self.model.get_point_list()]
+
+        # Selezione punto 1
+        id1_str, ok1 = QInputDialog.getItem(
+            self, "Linea - Punto 1", "Seleziona primo punto (ID):", point_ids, 0, False
+        )
+        if not ok1:
+            return
+        id1 = int(id1_str)
+
+        # Selezione punto 2
+        id2_str, ok2 = QInputDialog.getItem(
+            self, "Linea - Punto 2", "Seleziona secondo punto (ID):", point_ids, 0, False
+        )
+        if not ok2:
+            return
+        id2 = int(id2_str)
+
+        if id1 == id2:
+            QMessageBox.warning(self, "Attenzione", "Seleziona due punti diversi")
+            return
+
+        # Stile linea
+        styles = ["Continua (solid)", "Tratteggiata (dashed)", "Punteggiata (dotted)"]
+        style_sel, ok3 = QInputDialog.getItem(
+            self, "Stile Linea", "Seleziona stile:", styles, 0, False
+        )
+        if not ok3:
+            return
+
+        style_map = {"Continua (solid)": "solid", "Tratteggiata (dashed)": "dashed", "Punteggiata (dotted)": "dotted"}
+        style = style_map[style_sel]
+
+        # Crea annotazione
+        annot = LineAnnotation(id1, id2, color='red', linewidth=2, style=style)
+        self.annotations.append(annot)
+        self.update_plot()
+
+        QMessageBox.information(self, "Linea Aggiunta",
+                              f"Linea aggiunta tra punto {id1} e punto {id2}")
+
+    def add_dimension_annotation(self):
+        """Aggiungi annotazione quota tra due punti"""
+        if len(self.model.points) < 2:
+            QMessageBox.warning(self, "Attenzione", "Servono almeno 2 punti per creare una quota")
+            return
+
+        # Lista ID punti
+        point_ids = [str(p.id) for p in self.model.get_point_list()]
+
+        # Selezione punto 1
+        id1_str, ok1 = QInputDialog.getItem(
+            self, "Quota - Punto 1", "Seleziona primo punto (ID):", point_ids, 0, False
+        )
+        if not ok1:
+            return
+        id1 = int(id1_str)
+
+        # Selezione punto 2
+        id2_str, ok2 = QInputDialog.getItem(
+            self, "Quota - Punto 2", "Seleziona secondo punto (ID):", point_ids, 0, False
+        )
+        if not ok2:
+            return
+        id2 = int(id2_str)
+
+        if id1 == id2:
+            QMessageBox.warning(self, "Attenzione", "Seleziona due punti diversi")
+            return
+
+        # Offset quota
+        offset, ok3 = QInputDialog.getDouble(
+            self, "Offset Quota", "Offset linea di quota (m):", 0.5, 0.1, 10.0, 2
+        )
+        if not ok3:
+            return
+
+        # Crea annotazione
+        annot = DimensionAnnotation(id1, id2, offset=offset, color='blue', show_text=True)
+        self.annotations.append(annot)
+        self.update_plot()
+
+        QMessageBox.information(self, "Quota Aggiunta",
+                              f"Quota aggiunta tra punto {id1} e punto {id2}")
+
+    def clear_annotations(self):
+        """Pulisci tutte le annotazioni"""
+        if not self.annotations:
+            QMessageBox.information(self, "Annotazioni", "Nessuna annotazione da rimuovere")
+            return
+
+        reply = QMessageBox.question(
+            self, 'Conferma',
+            f'Rimuovere tutte le {len(self.annotations)} annotazioni?',
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            self.annotations.clear()
+            self.update_plot()
+            QMessageBox.information(self, "Annotazioni Rimosse",
+                                  "Tutte le annotazioni sono state rimosse")
 
 
 class CoordinateInputPanel(QGroupBox):
@@ -1389,6 +1816,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction('Importa Excel...', self.import_excel)
         file_menu.addAction('Esporta Excel...', self.export_excel)
         file_menu.addSeparator()
+        file_menu.addAction('Importa DXF...', self.import_dxf_ui)
         file_menu.addAction('Esporta DXF...', self.export_dxf)
         file_menu.addSeparator()
         file_menu.addAction('Genera Report PDF...', self.generate_pdf_report_ui, 'Ctrl+P')
@@ -1681,6 +2109,29 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Errore Esportazione",
                                    f"Impossibile esportare Excel:\n{e}")
+
+    def import_dxf_ui(self):
+        """Importa coordinate da file DXF"""
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Importa DXF", "",
+            "File DXF (*.dxf);;Tutti i file (*)"
+        )
+
+        if filename:
+            try:
+                imported = self.model.import_dxf(filename)
+                self.refresh_display()
+
+                if EZDXF_AVAILABLE:
+                    mode_msg = "Importazione avanzata con ezdxf"
+                else:
+                    mode_msg = "Importazione con parser manuale"
+
+                QMessageBox.information(self, "Importazione Completata",
+                                      f"{imported} punti importati da:\n{filename}\n\n{mode_msg}\n\nEntità lette: POINT, TEXT, INSERT (blocchi)")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore Importazione",
+                                   f"Impossibile importare DXF:\n{e}\n\nSuggerimento: Installare ezdxf per import avanzato:\npip install ezdxf")
 
     def export_dxf(self):
         """Esporta coordinate in formato DXF (semplificato)"""
@@ -2374,6 +2825,7 @@ Y centro: {sum(y_coords)/len(y_coords):.4f} m
         matplotlib_status = "✓ Disponibile" if MATPLOTLIB_AVAILABLE else "✗ Non installato"
         openpyxl_status = "✓ Disponibile" if OPENPYXL_AVAILABLE else "✗ Non installato"
         reportlab_status = "✓ Disponibile" if REPORTLAB_AVAILABLE else "✗ Non installato"
+        ezdxf_status = "✓ Disponibile" if EZDXF_AVAILABLE else "✗ Non installato (fallback a parser manuale)"
 
         about_text = f"""INPUT COORDINATE FILI FISSI
 
@@ -2433,12 +2885,25 @@ Report PDF (Ctrl+P):
 • Elenco completo coordinate con formattazione
 • Layout professionale A4 pronto per stampa
 
+Import/Export DXF:
+• Import DXF con ezdxf (opzionale) o parser manuale
+• Lettura entità POINT, TEXT, INSERT (blocchi)
+• Layers come livelli
+• Export DXF semplificato
+
+Annotazioni Grafiche:
+• Linee tra punti (stili: continua, tratteggiata, punteggiata)
+• Quote/dimensioni con offset configurabile
+• Frecce e testo automatico con distanza
+• Rendering in tutte le viste 2D (XY, XZ, YZ)
+
 Librerie Opzionali:
 Matplotlib: {matplotlib_status}
 Openpyxl: {openpyxl_status}
 Reportlab: {"✓ Disponibile" if REPORTLAB_AVAILABLE else "✗ Non installato"}
+Ezdxf: {"✓ Disponibile" if EZDXF_AVAILABLE else "✗ Non installato (fallback a parser manuale)"}
 
-Versione: 5.2 - PDF Report Generation
+Versione: 5.3 - DXF Import & Annotations
 """
         QMessageBox.about(self, "Informazioni", about_text)
 
@@ -2446,7 +2911,7 @@ Versione: 5.2 - PDF Report Generation
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Input Coordinate Fili Fissi")
-    app.setApplicationVersion("5.2")
+    app.setApplicationVersion("5.3")
     
     # Stile applicazione
     app.setStyleSheet("""
