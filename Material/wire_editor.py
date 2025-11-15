@@ -384,13 +384,15 @@ class MainWindow(QMainWindow):
     
     def setup_menus(self):
         menubar = self.menuBar()
-        
+
         # Menu File
         file_menu = menubar.addMenu('File')
         file_menu.addAction('Nuovo Progetto', self.new_project, 'Ctrl+N')
         file_menu.addSeparator()
         file_menu.addAction('Apri...', self.open_file, 'Ctrl+O')
         file_menu.addAction('Salva...', self.save_file, 'Ctrl+S')
+        file_menu.addSeparator()
+        file_menu.addAction('Importa CSV...', self.import_csv)
         file_menu.addAction('Esporta CSV...', self.export_csv)
         file_menu.addSeparator()
         file_menu.addAction('Esci', self.close, 'Ctrl+Q')
@@ -477,27 +479,112 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Errore Caricamento", 
                                    f"Impossibile aprire il file:\n{e}")
     
+    def import_csv(self):
+        """Importa coordinate da file CSV"""
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Importa CSV", "",
+            "File CSV (*.csv);;Tutti i file (*)"
+        )
+
+        if not filename:
+            return
+
+        try:
+            import csv
+
+            # Chiedi se sovrascrivere o aggiungere
+            if len(self.model.points) > 0:
+                reply = QMessageBox.question(
+                    self, 'Importa CSV',
+                    'Vuoi sovrascrivere i punti esistenti o aggiungere i nuovi punti?\n\n'
+                    'Si = Sovrascrivi (elimina punti esistenti)\n'
+                    'No = Aggiungi (mantieni punti esistenti)',
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                )
+
+                if reply == QMessageBox.Cancel:
+                    return
+                elif reply == QMessageBox.Yes:
+                    self.model.clear()
+
+            imported_count = 0
+            errors = []
+
+            with open(filename, 'r', encoding='utf-8') as f:
+                csv_reader = csv.DictReader(f)
+
+                # Verifica header
+                if csv_reader.fieldnames is None:
+                    raise ValueError("File CSV vuoto o formato non valido")
+
+                # Supporta sia header italiani che inglesi
+                expected_headers = ['ID', 'X', 'Y', 'Z', 'Descrizione']
+                alt_headers = ['id', 'x', 'y', 'z', 'description']
+
+                for row_num, row in enumerate(csv_reader, start=2):  # Start at 2 (after header)
+                    try:
+                        # Estrai valori gestendo vari formati di header
+                        x_val = row.get('X') or row.get('x')
+                        y_val = row.get('Y') or row.get('y')
+                        z_val = row.get('Z') or row.get('z', '0.0')
+                        desc_val = row.get('Descrizione') or row.get('description', '')
+
+                        if x_val is None or y_val is None:
+                            errors.append(f"Riga {row_num}: Mancano coordinate X o Y")
+                            continue
+
+                        # Converti esplicitamente a float/str per evitare format string errors
+                        x = float(str(x_val).strip())
+                        y = float(str(y_val).strip())
+                        z = float(str(z_val).strip()) if z_val else 0.0
+                        description = str(desc_val).strip().strip('"')
+
+                        # Aggiungi punto
+                        self.model.add_point(x, y, z, description)
+                        imported_count += 1
+
+                    except ValueError as e:
+                        errors.append(f"Riga {row_num}: Errore conversione dati - {str(e)}")
+                    except Exception as e:
+                        errors.append(f"Riga {row_num}: Errore generico - {str(e)}")
+
+            self.refresh_display()
+
+            # Messaggio risultato
+            msg = f"Importati {imported_count} punti con successo"
+            if errors:
+                msg += f"\n\nErrori riscontrati ({len(errors)}):\n" + "\n".join(errors[:5])
+                if len(errors) > 5:
+                    msg += f"\n... e altri {len(errors) - 5} errori"
+                QMessageBox.warning(self, "Importazione Completata con Errori", msg)
+            else:
+                QMessageBox.information(self, "Importazione Completata", msg)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Errore Importazione",
+                               f"Impossibile importare CSV:\n{str(e)}")
+
     def export_csv(self):
         """Esporta coordinate in formato CSV"""
         if not self.model.points:
             QMessageBox.warning(self, "Attenzione", "Nessuna coordinata da esportare")
             return
-        
+
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Esporta CSV", "coordinate_fili_fissi.csv", 
+            self, "Esporta CSV", "coordinate_fili_fissi.csv",
             "File CSV (*.csv);;Tutti i file (*)"
         )
-        
+
         if filename:
             try:
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write("ID,X,Y,Z,Descrizione\n")
                     for point in self.model.get_point_list():
                         f.write(f'{point.id},{point.x:.4f},{point.y:.4f},{point.z:.3f},"{point.description}"\n')
-                QMessageBox.information(self, "Esportazione Completata", 
+                QMessageBox.information(self, "Esportazione Completata",
                                       f"CSV esportato in:\n{filename}")
             except Exception as e:
-                QMessageBox.critical(self, "Errore Esportazione", 
+                QMessageBox.critical(self, "Errore Esportazione",
                                    f"Impossibile esportare CSV:\n{e}")
     
     def show_statistics(self):

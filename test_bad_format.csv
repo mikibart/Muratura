@@ -1,0 +1,6 @@
+ID,X,Y,Z,Descrizione
+1,10.5,20.3,0.0,"Valid Point"
+2,invalid,20.3,0.0,"Bad X coordinate"
+3,15.2,,0.0,"Missing Y"
+4,20.0,25.5,,"Valid with missing Z"
+5,30.0,35.0,5.5,"Another Valid Point"
