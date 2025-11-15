@@ -667,6 +667,379 @@ class DeleteEdgeCommand(Command):
 
 
 # ============================================================================
+# CANVAS VIEW COMPONENTS (semplificato per UnifiedModel)
+# ============================================================================
+
+class WireCanvasView(QWidget):
+    """Canvas grafico per visualizzazione e editing nodi/edges"""
+
+    selection_changed = pyqtSignal(int, str)  # node_id, type ('node'|'edge')
+
+    def __init__(self, model: UnifiedModel, parent=None):
+        super().__init__(parent)
+        self.model = model
+        self.setMinimumSize(800, 600)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        # Vista e navigazione
+        self.zoom_factor = 1.0
+        self.pan_offset = QPointF(0, 0)
+        self.zoom_min = 0.1
+        self.zoom_max = 10.0
+
+        # Grid
+        self.grid_size = 50  # pixel per metro base
+        self.show_grid = True
+        self.show_coordinates = True
+
+        # Selezione
+        self.selected_node_id = None
+        self.selected_edge_id = None
+        self.hover_node_id = None
+
+        # Interazione
+        self.dragging_node = False
+        self.panning = False
+        self.creating_edge = False
+        self.edge_start_node_id = None
+        self.drag_offset = QPointF(0, 0)
+        self.last_mouse_pos = QPointF(0, 0)
+
+        # Colori
+        self.node_color = QColor(100, 150, 200)
+        self.edge_color = QColor(80, 80, 80)
+        self.selected_color = QColor(255, 100, 100)
+        self.hover_color = QColor(100, 255, 100)
+        self.grid_color = QColor(220, 220, 220)
+
+        self.node_radius = 8
+
+    def screen_to_world(self, screen_point: QPointF) -> QPointF:
+        """Converte coordinate schermo in coordinate mondo (metri)"""
+        adjusted = (screen_point - self.pan_offset) / self.zoom_factor
+        x = adjusted.x() / self.grid_size
+        y = (self.height() - adjusted.y()) / self.grid_size
+        return QPointF(x, y)
+
+    def world_to_screen(self, world_point: QPointF) -> QPointF:
+        """Converte coordinate mondo in coordinate schermo"""
+        x = world_point.x() * self.grid_size
+        y = self.height() - (world_point.y() * self.grid_size)
+        return QPointF(x, y) * self.zoom_factor + self.pan_offset
+
+    def get_node_at(self, screen_point: QPointF, tolerance: float = 15) -> Optional[int]:
+        """Trova nodo vicino al punto"""
+        for node in self.model.nodes.values():
+            world_pos = QPointF(node.x, node.y)
+            screen_pos = self.world_to_screen(world_pos)
+            dist = math.sqrt((screen_pos.x() - screen_point.x())**2 +
+                           (screen_pos.y() - screen_point.y())**2)
+            if dist <= tolerance:
+                return node.id
+        return None
+
+    def paintEvent(self, event):
+        """Rendering canvas"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Sfondo
+        painter.fillRect(self.rect(), Qt.white)
+
+        # Griglia
+        if self.show_grid:
+            self.draw_grid(painter)
+
+        # Edges
+        self.draw_edges(painter)
+
+        # Nodes
+        self.draw_nodes(painter)
+
+        # Edge in creazione
+        if self.creating_edge and self.edge_start_node_id:
+            self.draw_temp_edge(painter)
+
+    def draw_grid(self, painter: QPainter):
+        """Disegna griglia"""
+        painter.setPen(QPen(self.grid_color, 1))
+
+        grid_step = self.grid_size * self.zoom_factor
+
+        # Limita numero linee per performance
+        if grid_step < 5:
+            return
+
+        # Linee verticali
+        x = int(self.pan_offset.x() % grid_step)
+        while x < self.width():
+            painter.drawLine(int(x), 0, int(x), self.height())
+            x += grid_step
+
+        # Linee orizzontali
+        y = int(self.pan_offset.y() % grid_step)
+        while y < self.height():
+            painter.drawLine(0, int(y), self.width(), int(y))
+            y += grid_step
+
+    def draw_edges(self, painter: QPainter):
+        """Disegna edges"""
+        for edge in self.model.edges.values():
+            n1 = self.model.nodes.get(edge.node1_id)
+            n2 = self.model.nodes.get(edge.node2_id)
+
+            if not n1 or not n2:
+                continue
+
+            p1 = self.world_to_screen(QPointF(n1.x, n1.y))
+            p2 = self.world_to_screen(QPointF(n2.x, n2.y))
+
+            # Colore edge
+            color = self.selected_color if edge.id == self.selected_edge_id else edge.color
+            painter.setPen(QPen(color, edge.width))
+            painter.drawLine(p1, p2)
+
+            # Lunghezza edge
+            if self.show_coordinates:
+                length = n1.distance_to(n2)
+                mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+                painter.setPen(QPen(Qt.black))
+                painter.setFont(QFont("Arial", 8))
+                painter.drawText(mid, f"{length:.2f}m")
+
+    def draw_nodes(self, painter: QPainter):
+        """Disegna nodi"""
+        for node in self.model.nodes.values():
+            screen_pos = self.world_to_screen(QPointF(node.x, node.y))
+
+            # Colore nodo
+            if node.id == self.selected_node_id:
+                color = self.selected_color
+            elif node.id == self.hover_node_id:
+                color = self.hover_color
+            else:
+                color = node.color
+
+            # Disegna nodo
+            painter.setBrush(QBrush(color))
+            painter.setPen(QPen(Qt.black, 2))
+            painter.drawEllipse(screen_pos, self.node_radius, self.node_radius)
+
+            # ID e descrizione
+            if self.show_coordinates:
+                painter.setPen(QPen(Qt.black))
+                painter.setFont(QFont("Arial", 9))
+                text = f"#{node.id}"
+                if node.description:
+                    text += f" {node.description}"
+                painter.drawText(screen_pos + QPointF(self.node_radius + 5, 5), text)
+
+                # Coordinate
+                painter.setFont(QFont("Arial", 8))
+                coord_text = f"({node.x:.2f}, {node.y:.2f})"
+                painter.drawText(screen_pos + QPointF(self.node_radius + 5, 18), coord_text)
+
+    def draw_temp_edge(self, painter: QPainter):
+        """Disegna edge temporaneo durante creazione"""
+        if not self.edge_start_node_id:
+            return
+
+        start_node = self.model.nodes.get(self.edge_start_node_id)
+        if not start_node:
+            return
+
+        p1 = self.world_to_screen(QPointF(start_node.x, start_node.y))
+        p2 = self.last_mouse_pos
+
+        painter.setPen(QPen(QColor(255, 0, 0), 2, Qt.DashLine))
+        painter.drawLine(p1, p2)
+
+    def mousePressEvent(self, event):
+        """Mouse press - selezione, drag, pan"""
+        pos = QPointF(event.pos())
+        self.last_mouse_pos = pos
+
+        if event.button() == Qt.LeftButton:
+            # Cerca nodo
+            node_id = self.get_node_at(pos)
+
+            if node_id:
+                if event.modifiers() & Qt.ControlModifier:
+                    # Ctrl+Click = inizia edge
+                    self.creating_edge = True
+                    self.edge_start_node_id = node_id
+                else:
+                    # Selezione e drag
+                    self.selected_node_id = node_id
+                    self.selected_edge_id = None
+                    self.dragging_node = True
+
+                    node = self.model.nodes[node_id]
+                    screen_pos = self.world_to_screen(QPointF(node.x, node.y))
+                    self.drag_offset = screen_pos - pos
+
+                    self.selection_changed.emit(node_id, 'node')
+            else:
+                # Click su vuoto = deseleziona
+                self.selected_node_id = None
+                self.selected_edge_id = None
+                self.selection_changed.emit(-1, 'none')
+
+        elif event.button() == Qt.MiddleButton or event.button() == Qt.RightButton:
+            # Pan
+            self.panning = True
+            self.setCursor(Qt.ClosedHandCursor)
+
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        """Mouse move - drag, pan, hover"""
+        pos = QPointF(event.pos())
+        delta = pos - self.last_mouse_pos
+        self.last_mouse_pos = pos
+
+        if self.dragging_node and self.selected_node_id:
+            # Drag nodo
+            new_screen_pos = pos + self.drag_offset
+            new_world_pos = self.screen_to_world(new_screen_pos)
+
+            # Aggiorna nodo con Command
+            cmd = UpdateNodeCommand(self.selected_node_id, x=new_world_pos.x(), y=new_world_pos.y())
+            self.model.execute_command(cmd)
+
+        elif self.panning:
+            # Pan vista
+            self.pan_offset += delta
+
+        elif self.creating_edge:
+            # Aggiorna preview edge
+            pass
+
+        else:
+            # Hover detection
+            hover_id = self.get_node_at(pos)
+            if hover_id != self.hover_node_id:
+                self.hover_node_id = hover_id
+                self.update()
+                return
+
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        """Mouse release - fine drag/pan/edge"""
+        if event.button() == Qt.LeftButton:
+            if self.creating_edge and self.edge_start_node_id:
+                # Fine creazione edge
+                pos = QPointF(event.pos())
+                end_node_id = self.get_node_at(pos)
+
+                if end_node_id and end_node_id != self.edge_start_node_id:
+                    # Crea edge
+                    cmd = CreateEdgeCommand(self.edge_start_node_id, end_node_id, EdgeType.FREE)
+                    self.model.execute_command(cmd)
+
+                self.creating_edge = False
+                self.edge_start_node_id = None
+
+            self.dragging_node = False
+
+        elif event.button() == Qt.MiddleButton or event.button() == Qt.RightButton:
+            self.panning = False
+            self.setCursor(Qt.ArrowCursor)
+
+        self.update()
+
+    def wheelEvent(self, event):
+        """Wheel - zoom"""
+        zoom_delta = event.angleDelta().y()
+
+        if zoom_delta > 0:
+            self.zoom_factor *= 1.1
+        else:
+            self.zoom_factor *= 0.9
+
+        self.zoom_factor = max(self.zoom_min, min(self.zoom_max, self.zoom_factor))
+        self.update()
+
+    def keyPressEvent(self, event):
+        """Gestione tasti"""
+        if event.key() == Qt.Key_Delete and self.selected_node_id:
+            # Elimina nodo selezionato
+            reply = QMessageBox.question(
+                self, 'Conferma',
+                f'Eliminare nodo ID {self.selected_node_id}?',
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                cmd = DeleteNodeCommand(self.selected_node_id)
+                self.model.execute_command(cmd)
+                self.selected_node_id = None
+                self.update()
+
+        elif event.key() == Qt.Key_F:
+            # Fit to extents
+            self.fit_to_extents()
+
+    def mouseDoubleClickEvent(self, event):
+        """Double click - crea nodo"""
+        if event.button() == Qt.LeftButton:
+            pos = QPointF(event.pos())
+            world_pos = self.screen_to_world(pos)
+
+            # Crea nuovo nodo
+            cmd = CreateNodeCommand(world_pos.x(), world_pos.y(), 0.0, "", "", TopologyRole.FREE)
+            node_id = self.model.execute_command(cmd)
+            self.selected_node_id = node_id
+            self.selection_changed.emit(node_id, 'node')
+            self.update()
+
+    def fit_to_extents(self):
+        """Adatta vista a tutti i nodi"""
+        if not self.model.nodes:
+            return
+
+        bounds = self.model.get_bounds()
+        if not bounds:
+            return
+
+        margin = 1.0  # metri
+        x_min = bounds['x_min'] - margin
+        x_max = bounds['x_max'] + margin
+        y_min = bounds['y_min'] - margin
+        y_max = bounds['y_max'] + margin
+
+        width = x_max - x_min
+        height = y_max - y_min
+
+        if width <= 0 or height <= 0:
+            return
+
+        # Calcola zoom per contenere tutto
+        zoom_x = self.width() / (width * self.grid_size)
+        zoom_y = self.height() / (height * self.grid_size)
+        self.zoom_factor = min(zoom_x, zoom_y) * 0.9  # 90% per margine
+
+        self.zoom_factor = max(self.zoom_min, min(self.zoom_max, self.zoom_factor))
+
+        # Centra
+        center_x = (x_min + x_max) / 2
+        center_y = (y_min + y_max) / 2
+        self.center_on_world_point(QPointF(center_x, center_y))
+
+    def center_on_world_point(self, world_point: QPointF):
+        """Centra vista su punto mondo"""
+        screen_center = QPointF(self.width() / 2, self.height() / 2)
+        target_screen = self.world_to_screen(world_point)
+        self.pan_offset += screen_center - target_screen
+        self.update()
+
+    def refresh(self):
+        """Aggiorna canvas"""
+        self.update()
+
+
+# ============================================================================
 # TABLE VIEW COMPONENTS (da wire_editor.py)
 # ============================================================================
 
@@ -994,18 +1367,48 @@ class UnifiedMainWindow(QMainWindow):
         self.refresh_table_view()
 
     def setup_canvas_tab(self):
-        """Setup tab canvas grafico"""
+        """Setup tab canvas grafico (integrato)"""
         layout = QVBoxLayout()
 
-        # Placeholder per ora
-        label = QLabel("Canvas View - Design grafico topologie")
-        label.setAlignment(Qt.AlignCenter)
-        label.setFont(QFont("Arial", 16))
-        layout.addWidget(label)
+        # Canvas
+        self.canvas_view = WireCanvasView(self.model)
+        self.canvas_view.selection_changed.connect(self.on_canvas_selection_changed)
+        layout.addWidget(self.canvas_view)
 
-        info = QLabel("FASE 2: Qui verrà integrato WireEditor canvas da wire_editor1.py")
-        info.setAlignment(Qt.AlignCenter)
-        layout.addWidget(info)
+        # Toolbar canvas
+        toolbar_layout = QHBoxLayout()
+
+        # Pulsanti azione
+        btn_fit = QPushButton("Fit All (F)")
+        btn_fit.clicked.connect(self.canvas_view.fit_to_extents)
+        toolbar_layout.addWidget(btn_fit)
+
+        # Toggle griglia
+        self.chk_grid = QCheckBox("Griglia")
+        self.chk_grid.setChecked(self.canvas_view.show_grid)
+        self.chk_grid.toggled.connect(self.on_grid_toggled)
+        toolbar_layout.addWidget(self.chk_grid)
+
+        # Toggle coordinate
+        self.chk_coords = QCheckBox("Coordinate")
+        self.chk_coords.setChecked(self.canvas_view.show_coordinates)
+        self.chk_coords.toggled.connect(self.on_coords_toggled)
+        toolbar_layout.addWidget(self.chk_coords)
+
+        toolbar_layout.addStretch()
+
+        # Info selezione
+        self.canvas_info_label = QLabel("Nessuna selezione")
+        self.canvas_info_label.setFont(QFont("Arial", 9))
+        toolbar_layout.addWidget(self.canvas_info_label)
+
+        layout.addLayout(toolbar_layout)
+
+        # Istruzioni
+        help_text = QLabel("💡 Doppio click: crea nodo | Drag: sposta | Ctrl+Click: crea edge | Tasto centrale/destro: pan | Rotella: zoom")
+        help_text.setFont(QFont("Arial", 8))
+        help_text.setStyleSheet("color: #666; padding: 5px;")
+        layout.addWidget(help_text)
 
         self.canvas_tab.setLayout(layout)
 
@@ -1210,12 +1613,14 @@ class UnifiedMainWindow(QMainWindow):
     def on_node_added(self, node_id: int):
         """Callback quando aggiunto nodo"""
         self.refresh_table_view()
+        self.canvas_view.refresh()
         self.update_status()
         self.update_undo_redo_actions()
 
     def on_table_data_changed(self):
         """Callback quando dati tabella cambiano"""
         self.refresh_table_view()
+        self.canvas_view.refresh()
         self.update_status()
         self.update_undo_redo_actions()
 
@@ -1223,6 +1628,34 @@ class UnifiedMainWindow(QMainWindow):
         """Gestisce cambio filtro livello"""
         self.coord_table.refresh(level if level != "Tutti" else None)
         self.update_table_info()
+
+    # === Callbacks Canvas View ===
+
+    def on_canvas_selection_changed(self, node_id: int, sel_type: str):
+        """Callback quando cambia selezione nel canvas"""
+        if sel_type == 'node' and node_id >= 0:
+            node = self.model.nodes.get(node_id)
+            if node:
+                self.canvas_info_label.setText(
+                    f"Nodo #{node.id}: ({node.x:.2f}, {node.y:.2f}) - {node.description}"
+                )
+        else:
+            self.canvas_info_label.setText("Nessuna selezione")
+
+        # Aggiorna anche tabella se modifiche dal canvas
+        self.refresh_table_view()
+        self.update_status()
+        self.update_undo_redo_actions()
+
+    def on_grid_toggled(self, checked: bool):
+        """Toggle griglia canvas"""
+        self.canvas_view.show_grid = checked
+        self.canvas_view.update()
+
+    def on_coords_toggled(self, checked: bool):
+        """Toggle coordinate canvas"""
+        self.canvas_view.show_coordinates = checked
+        self.canvas_view.update()
 
     def refresh_table_view(self):
         """Aggiorna vista tabellare completa"""
@@ -1280,7 +1713,7 @@ Openpyxl: {"✓ Disponibile" if OPENPYXL_AVAILABLE else "✗ Non installato"}
 Reportlab: {"✓ Disponibile" if REPORTLAB_AVAILABLE else "✗ Non installato"}
 Ezdxf: {"✓ Disponibile" if EZDXF_AVAILABLE else "✗ Non installato"}
 
-Versione: 6.0-beta (FASE 2 - TableView Integrato)
+Versione: 6.0-rc (FASE 2 - TableView + CanvasView Integrati)
 """
         QMessageBox.about(self, "About", about_text)
 
@@ -1292,7 +1725,7 @@ Versione: 6.0-beta (FASE 2 - TableView Integrato)
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("Wire Editor Unified")
-    app.setApplicationVersion("6.0-beta")
+    app.setApplicationVersion("6.0-rc")
     app.setOrganizationName("Arch. Michelangelo Bartolotta")
 
     # Stile applicazione
