@@ -1963,6 +1963,15 @@ class UnifiedMainWindow(QMainWindow):
         else:
             self.bounds_label.setText("")
 
+    def refresh_all_views(self):
+        """Aggiorna tutte le viste (table, canvas, 3D)"""
+        self.refresh_table_view()
+        self.canvas_view.refresh()
+        if MATPLOTLIB_AVAILABLE and hasattr(self, 'viz_3d'):
+            self.viz_3d.refresh_plot()
+        self.update_status()
+        self.update_undo_redo_actions()
+
     # === Reports & Export Methods ===
 
     def export_csv(self):
