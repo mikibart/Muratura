@@ -1,0 +1,134 @@
+# ============================================================================
+# ESEMPIO FILE DSL MURATURA (.mur)
+# ============================================================================
+# Edificio residenziale a 2 piani in muratura portante
+# Conforme NTC 2018
+# ============================================================================
+
+# INTESTAZIONE PROGETTO
+PROGETTO "Casa Bifamiliare" AUTORE "Ing. Rossi" DATA 2024-01-15
+
+# ============================================================================
+# MATERIALI
+# ============================================================================
+# Sintassi: MATERIALE nome tipo malta conservazione
+# Tipi: PIETRA_IRREGOLARE, PIETRA_SBOZZATA, PIETRA_SQUADRATA, PIETRA_BLOCCHI,
+#       MATTONI_PIENI, MATTONI_SEMIPIENI, BLOCCHI_LATERIZIO, BLOCCHI_FORATI,
+#       BLOCCHI_CLS, BLOCCHI_CLS_ESPANSO
+# Malta: SCADENTE, BUONA, OTTIME
+# Conservazione: CATTIVO, MEDIOCRE, BUONO, OTTIMO
+
+MATERIALE mattoni_esistenti MATTONI_PIENI BUONA MEDIOCRE
+MATERIALE mattoni_nuovi MATTONI_PIENI BUONA BUONO
+MATERIALE pietra_locale PIETRA_SQUADRATA BUONA BUONO
+
+# Materiale custom (per murature non standard)
+# Sintassi: MATERIALE_CUSTOM nome fcm[MPa] E[MPa] G[MPa] tau0[MPa] peso[kN/m3]
+MATERIALE_CUSTOM tufo_locale 2.5 1500 500 0.06 16
+
+# ============================================================================
+# PIANI
+# ============================================================================
+# Sintassi: PIANO indice altezza[m] massa[kg]
+
+PIANO 0 3.20 15000    # Piano terra - altezza 3.20m, massa 15 ton
+PIANO 1 3.00 12000    # Piano primo - altezza 3.00m, massa 12 ton
+PIANO 2 2.80 8000     # Sottotetto - altezza 2.80m, massa 8 ton
+
+# ============================================================================
+# PARETI
+# ============================================================================
+# Sintassi: PARETE nome piano lunghezza[m] spessore[m] materiale
+
+# Parete Nord
+PARETE PN 0 8.50 0.45 mattoni_esistenti
+PARETE PN 1 8.50 0.30 mattoni_nuovi
+PARETE PN 2 8.50 0.25 mattoni_nuovi
+
+# Parete Sud
+PARETE PS 0 8.50 0.45 mattoni_esistenti
+PARETE PS 1 8.50 0.30 mattoni_nuovi
+PARETE PS 2 8.50 0.25 mattoni_nuovi
+
+# Parete Est
+PARETE PE 0 6.00 0.45 mattoni_esistenti
+PARETE PE 1 6.00 0.30 mattoni_nuovi
+
+# Parete Ovest
+PARETE PO 0 6.00 0.45 mattoni_esistenti
+PARETE PO 1 6.00 0.30 mattoni_nuovi
+
+# Setto interno
+PARETE SI 0 4.00 0.30 mattoni_esistenti
+PARETE SI 1 4.00 0.25 mattoni_nuovi
+
+# ============================================================================
+# APERTURE
+# ============================================================================
+# Sintassi: APERTURA parete piano tipo larghezza[m] altezza[m] x[m] y[m]
+# Tipo: finestra, porta, portafinestra, nicchia
+# x: distanza dal centro della parete (positivo = destra)
+# y: quota dal pavimento
+
+# Piano Terra - Parete Nord
+APERTURA PN 0 finestra 1.20 1.40 -2.50 0.90
+APERTURA PN 0 finestra 1.20 1.40 2.50 0.90
+APERTURA PN 0 porta 1.00 2.10 0.00 0.00
+
+# Piano Terra - Parete Sud
+APERTURA PS 0 portafinestra 1.40 2.20 -2.00 0.00
+APERTURA PS 0 portafinestra 1.40 2.20 2.00 0.00
+
+# Piano Terra - Parete Est
+APERTURA PE 0 finestra 0.80 1.20 0.00 1.00
+
+# Piano Primo - Parete Nord
+APERTURA PN 1 finestra 1.20 1.40 -2.50 0.90
+APERTURA PN 1 finestra 1.20 1.40 2.50 0.90
+
+# Piano Primo - Parete Sud
+APERTURA PS 1 finestra 1.40 1.40 -2.00 0.90
+APERTURA PS 1 finestra 1.40 1.40 2.00 0.90
+
+# Sottotetto - finestre mansarda
+APERTURA PN 2 finestra 0.80 1.00 0.00 0.60
+APERTURA PS 2 finestra 0.80 1.00 0.00 0.60
+
+# ============================================================================
+# CARICHI
+# ============================================================================
+# Sintassi: CARICO piano permanente[kN/m2] variabile[kN/m2] [copertura]
+
+CARICO 0 5.00 2.00           # Solaio piano terra
+CARICO 1 4.50 2.00           # Solaio piano primo
+CARICO 2 3.00 0.50 copertura # Copertura
+
+# ============================================================================
+# ANALISI
+# ============================================================================
+
+# Analisi pushover
+# Sintassi: PUSHOVER nome direzione pattern target_drift
+# Direzione: X, Y
+# Pattern: triangular, uniform, modal
+PUSHOVER push_X X triangular 0.04
+PUSHOVER push_Y Y triangular 0.04
+PUSHOVER push_X_unif X uniform 0.03
+
+# Analisi modale
+# Sintassi: MODALE nome n_modi
+MODALE modale_6modi 6
+MODALE modale_12modi 12
+
+# ============================================================================
+# NOTE
+# ============================================================================
+# Per caricare questo file:
+#   from connector import Muratura
+#   m = Muratura()
+#   m.carica_dsl("examples/esempio_edificio.mur")
+#   m.lista()
+#
+# Per esportare un progetto esistente:
+#   m.salva_dsl("output.mur")
+# ============================================================================

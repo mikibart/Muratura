@@ -162,6 +162,10 @@ class Muratura:
 ║    m.nuovo(nome)                   - Nuovo progetto          ║
 ║    m.report()                      - Genera report completo  ║
 ║                                                              ║
+║  FILE DSL (.mur)                                             ║
+║    m.carica_dsl(file)              - Carica da file .mur     ║
+║    m.salva_dsl(file)               - Salva in file .mur      ║
+║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
 """)
         elif topic == 'materiali':
@@ -1055,6 +1059,158 @@ ESEMPIO:
             pickle.dump(self.risultati, f)
 
         print(f"Progetto salvato in: {self.project_path}")
+
+    def carica_dsl(self, filepath: str) -> Dict:
+        """
+        Carica un progetto da file DSL (.mur).
+
+        Args:
+            filepath: Percorso al file .mur
+
+        Returns:
+            Dict con riepilogo progetto caricato
+
+        Esempio file .mur:
+            MATERIALE mattoni MATTONI_PIENI BUONA BUONO
+            PIANO 0 3.2 12000
+            PARETE P1 0 5.0 0.45 mattoni
+            APERTURA P1 0 finestra 1.2 1.4 0.0 0.9
+        """
+        from Material.dsl_parser import DSLParser, DSLProject
+
+        print(f"\nCaricamento file DSL: {filepath}")
+
+        parser = DSLParser(filepath)
+        project = parser.parse()
+
+        # Aggiorna nome progetto
+        self.project_name = project.nome
+        self.project_path = Path(__file__).parent / "projects" / project.nome
+        self.project_path.mkdir(parents=True, exist_ok=True)
+
+        # Crea materiali
+        for nome, mat_def in project.materiali.items():
+            if mat_def.custom:
+                self.materiale_custom(
+                    nome,
+                    fcm=mat_def.fcm,
+                    E=mat_def.E,
+                    G=mat_def.G,
+                    tau0=mat_def.tau0,
+                    weight=mat_def.peso
+                )
+            else:
+                self.materiale(
+                    nome,
+                    tipo=mat_def.tipo,
+                    malta=mat_def.malta,
+                    conservazione=mat_def.conservazione
+                )
+
+        # Crea pareti raggruppate per nome
+        pareti_grouped: Dict[str, List] = {}
+        for parete in project.pareti:
+            if parete.nome not in pareti_grouped:
+                pareti_grouped[parete.nome] = []
+            pareti_grouped[parete.nome].append(parete)
+
+        for nome_parete, pareti_list in pareti_grouped.items():
+            # Calcola altezza totale e numero piani
+            piani_set = set(p.piano for p in pareti_list)
+            n_floors = len(piani_set)
+
+            # Usa la prima parete per dimensioni base
+            p0 = pareti_list[0]
+            altezza_totale = sum(
+                project.piani[piano].altezza
+                for piano in piani_set
+                if piano in project.piani
+            ) or (n_floors * 3.0)
+
+            self.parete(nome_parete, p0.lunghezza, altezza_totale, p0.spessore, piani=n_floors)
+
+            # Assegna materiale
+            if p0.materiale in self.materiali:
+                self.assegna_materiale(nome_parete, p0.materiale)
+
+            # Assegna masse dai piani
+            for piano in piani_set:
+                if piano in project.piani:
+                    self.massa_piano(nome_parete, piano, project.piani[piano].massa)
+
+        # Aggiungi aperture alle geometrie
+        for apertura in project.aperture:
+            nome_geom = f"{apertura.parete}_P{apertura.piano}"
+            if nome_geom not in self.geometrie:
+                # Cerca la parete corrispondente
+                for parete in project.pareti:
+                    if parete.nome == apertura.parete and parete.piano == apertura.piano:
+                        piano_def = project.piani.get(apertura.piano)
+                        altezza = piano_def.altezza if piano_def else 3.0
+                        self.maschio(nome_geom, parete.lunghezza, altezza, parete.spessore)
+                        break
+
+            if nome_geom in self.geometrie:
+                self.apertura(nome_geom, apertura.larghezza, apertura.altezza,
+                             apertura.x, apertura.y, apertura.tipo)
+
+        # Salva carichi
+        for piano, carico in project.carichi.items():
+            for nome_parete in pareti_grouped:
+                if nome_parete in self.pareti:
+                    if 'carichi' not in self.pareti[nome_parete]:
+                        self.pareti[nome_parete]['carichi'] = {}
+                    self.pareti[nome_parete]['carichi'][piano] = {
+                        'permanente': carico.permanente,
+                        'variabile': carico.variabile,
+                        'copertura': carico.copertura
+                    }
+
+        # Prepara analisi (non esegue, solo configura)
+        for analisi in project.analisi:
+            self.analisi[analisi.nome] = {
+                'type': analisi.tipo.lower(),
+                'options': analisi.parametri,
+                'status': 'configured'
+            }
+
+        # Riepilogo
+        print(f"\nProgetto '{project.nome}' caricato da DSL:")
+        print(f"  Materiali: {len(self.materiali)}")
+        print(f"  Pareti: {len(self.pareti)}")
+        print(f"  Geometrie: {len(self.geometrie)}")
+        print(f"  Analisi configurate: {len(self.analisi)}")
+
+        if parser.warnings:
+            print("\nAvvisi:")
+            for w in parser.warnings:
+                print(f"  {w}")
+
+        return {
+            'nome': project.nome,
+            'materiali': len(self.materiali),
+            'pareti': len(self.pareti),
+            'geometrie': len(self.geometrie),
+            'analisi': len(self.analisi)
+        }
+
+    def salva_dsl(self, filepath: str = None) -> str:
+        """
+        Salva il progetto corrente in formato DSL (.mur).
+
+        Args:
+            filepath: Percorso file output (default: project_name.mur)
+
+        Returns:
+            Percorso file salvato
+        """
+        from Material.dsl_parser import DSLExporter
+
+        exporter = DSLExporter(self)
+        output_path = exporter.save(filepath)
+
+        print(f"Progetto salvato in formato DSL: {output_path}")
+        return output_path
 
     def carica(self, nome: str):
         """Carica un progetto esistente"""
