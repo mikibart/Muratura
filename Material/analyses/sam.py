@@ -1471,7 +1471,7 @@ def analyze_sam(wall_data: Dict, material: MaterialProperties,
     logger.info("Production Ready Definitiva - Correzioni complete e robustezza migliorata")
     
     # Valori di progetto del materiale
-    mat_values = material.get_design_values(config)
+    mat_values = material.get_design_values(config.gamma_m, config.FC)
     logger.info(f"Valori materiale: fcd={mat_values['fcd']:.2f} MPa, "
                 f"fvd0={mat_values['fvd0']:.3f} MPa, fvd={mat_values['fvd']:.3f} MPa")
     

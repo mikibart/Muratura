@@ -1,29 +1,4 @@
-@dataclass
-class SofteningOptions:
-    """
-    Opzioni configurabili per il comportamento post-picco.
-    
-    Attributes:
-        comp_residual_ratio: Resistenza residua in compressione (frazione di fcm)
-        comp_residual_strain: Deformazione a cui si raggiunge il residuo (se None, usa εcu)
-        ten_residual_ratio: Resistenza residua in trazione (frazione di ftm)
-        ten_softening_length: Lunghezza softening trazione (multipli di εt0)
-        tension_behavior: Tipo di comportamento a trazione
-        min_stress_threshold: Soglia minima per stress numerici [MPa]
-    """
-    comp_residual_ratio: float = 0.85      # 85% di fcm
-    comp_residual_strain: Optional[float] = None  # Se None, usa εcu
-    ten_residual_ratio: float = 0.10       # 10% di ftm
-    ten_softening_length: float = 5.0      # 5 * εt0
-    tension_behavior: TensionBehavior = TensionBehavior.LINEAR_SOFTENING
-    min_stress_threshold: float = 1e-12    # MPa
-    
-    def __post_init__(self):
-        """Validazione post-inizializzazione."""
-        if not 0 <= self.comp_residual_ratio <= 1:
-            raise ValueError(f"comp_residual_ratio deve essere in [0,1]: {self.comp_residual_ratio}")
-        if not 0 <= self.ten_residual_ratio <= 1:
-            raise ValueError(f"ten# constitutive.py - VERSIONE DEFINITIVA PRODUCTION-READY
+# constitutive.py - VERSIONE DEFINITIVA PRODUCTION-READY
 """
 Modulo per modelli costitutivi di materiali murari secondo NTC 2018.
 

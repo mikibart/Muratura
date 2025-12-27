@@ -836,17 +836,20 @@ def analyze_por(wall_data: Dict, material: MaterialProperties,
     self_weight_added = 0.0
     if options.include_self_weight and material:
         total_volume = sum(p.area * p.height for p in piers)
-        self_weight_added = total_volume * material.w  # kN
+        self_weight_added = total_volume * getattr(material, 'w', material.weight)  # kN
         N_total += self_weight_added
         logger.info(f"Peso proprio aggiunto: {self_weight_added:.1f} kN (totale N={N_total:.1f} kN)")
     
     # Valori di progetto materiale
     try:
         mat = material.get_design_values(gamma_m, FC)
+        # Aggiungi mu se non presente (MaterialProperties da materials.py non lo include)
+        if 'mu' not in mat:
+            mat['mu'] = getattr(material, 'mu', 0.4)  # Default 0.4 per muratura
     except Exception as e:
         logger.error(f"Errore calcolo valori di progetto: {e}")
         raise
-    
+
     # Override mu se specificato
     if options.mu is not None:
         mat['mu'] = options.mu
@@ -876,15 +879,15 @@ def analyze_por(wall_data: Dict, material: MaterialProperties,
         'method': 'POR - NTC 2018',
         'wall_geometry': wall_data,
         'material': {
-            'type': material.material_type.value if material.material_type else 'Custom',
-            'fm': material.fm,
+            'type': getattr(material.material_type, 'value', material.material_type) if material.material_type else 'Custom',
+            'fm': material.fm if hasattr(material, 'fm') else material.fcm,
             'tau0': material.tau0,
             'E': material.E,
             'G': material.G,
-            'w': material.w,
+            'w': material.w if hasattr(material, 'w') else material.weight,
             'gamma_m': gamma_m,
             'FC': FC,
-            'mu': mat['mu']
+            'mu': mat.get('mu', getattr(material, 'mu', 0.4))
         },
         'loads': {
             'vertical': N_total,
