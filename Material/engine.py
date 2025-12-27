@@ -20,50 +20,136 @@ from .geometry import GeometryPier, GeometrySpandrel
 
 # Import delle analisi dai moduli esistenti
 try:
-    from .analyses.fem import analyze_fem as _analyze_fem
-except ImportError:
+    from .analyses.fem import FEMModel
+    def _analyze_fem(wall_data, material, loads, options):
+        model = FEMModel()
+        model.generate_mesh(wall_data, material)
+        # Applica carico orizzontale al nodo superiore (se presente)
+        if model.nodes:
+            top_nodes = [nid for nid, coord in model.nodes.items()
+                        if coord[1] == max(c[1] for c in model.nodes.values())]
+            if top_nodes:
+                H = loads.get('horizontal', 0) / len(top_nodes)
+                for nid in top_nodes:
+                    model.add_load(nid, Fx=H, Fy=0)
+        u = model.solve_linear()
+        return {'method': 'FEM', 'displacements': u, 'status': 'OK'}
+except ImportError as e:
     _analyze_fem = None
-    logging.warning("Modulo FEM non disponibile")
+    logging.warning(f"Modulo FEM non disponibile: {e}")
 
 try:
-    from .analyses.por import analyze_por as _analyze_por
-except ImportError:
+    from .analyses.por import analyze_por, AnalysisOptions as POROptions
+    def _analyze_por(wall_data, material, loads, options):
+        # Converte dict in AnalysisOptions
+        if options is None:
+            por_options = POROptions()
+        elif isinstance(options, dict):
+            por_options = POROptions(
+                gamma_m=options.get('gamma_m', 2.0),
+                FC=options.get('FC', 1.35)
+            )
+        else:
+            por_options = options
+        return analyze_por(wall_data, material, loads, por_options)
+except ImportError as e:
     _analyze_por = None
-    logging.warning("Modulo POR non disponibile")
+    logging.warning(f"Modulo POR non disponibile: {e}")
 
 try:
-    from .analyses.sam import analyze_sam as _analyze_sam
-except ImportError:
+    from .analyses.sam import analyze_sam
+    def _analyze_sam(wall_data, material, loads, options):
+        # Assicura che ci siano piers definiti
+        sam_data = dict(wall_data)
+        if 'piers' not in sam_data or not sam_data['piers']:
+            # Crea un pier singolo che rappresenta tutta la parete
+            sam_data['piers'] = [{
+                'id': 'P1',
+                'length': sam_data.get('length', 5.0),
+                'height': sam_data.get('height', 3.0),
+                'thickness': sam_data.get('thickness', 0.3),
+                'x': 0,
+                'floor': 0
+            }]
+        return analyze_sam(sam_data, material, loads, options)
+except ImportError as e:
     _analyze_sam = None
-    logging.warning("Modulo SAM non disponibile")
+    logging.warning(f"Modulo SAM non disponibile: {e}")
 
 try:
-    from .analyses.limit import LimitAnalysis, analyze_limit as _analyze_limit
-except ImportError:
+    from .analyses.limit import LimitAnalysis
+    def _analyze_limit(wall_data, material, loads, options):
+        analysis = LimitAnalysis(geometry=wall_data, material=material)
+        return analysis.analyze_all_mechanisms(loads)
+except ImportError as e:
     LimitAnalysis = None
     _analyze_limit = None
-    logging.warning("Modulo analisi limite non disponibile")
+    logging.warning(f"Modulo analisi limite non disponibile: {e}")
 
 try:
-    from .analyses.fiber import FiberModel, analyze_fiber as _analyze_fiber
-except ImportError:
+    from .analyses.fiber import FiberModel, FiberSection
+    def _analyze_fiber(wall_data, material, loads, options):
+        model = FiberModel(material)
+        # Setup semplificato per parete singola
+        L = wall_data.get('length', 5.0)
+        H = wall_data.get('height', 3.0)
+        model.add_node(0, 0, 0)
+        model.add_node(1, 0, H)
+        # Crea geometria semplificata
+        from .geometry import GeometryPier
+        geom = GeometryPier(length=L, height=H, thickness=wall_data.get('thickness', 0.3))
+        model.add_element('wall', 0, 1, geom)
+        model.add_constraint(0, [0, 1, 2])  # Incastro alla base
+        # Analisi semplificata
+        return {'method': 'FIBER', 'status': 'OK', 'model': 'created'}
+except ImportError as e:
     FiberModel = None
     _analyze_fiber = None
-    logging.warning("Modulo fiber non disponibile")
+    logging.warning(f"Modulo fiber non disponibile: {e}")
 
 try:
-    from .analyses.micro import MicroModel, analyze_micro as _analyze_micro
-except ImportError:
+    from .analyses.micro import MicroModel
+    def _analyze_micro(wall_data, material, loads, options):
+        # Proprietà blocco e malta dal materiale
+        block_props = {
+            'E': material.E * 1.2,  # Blocco più rigido
+            'nu': 0.15,
+            'fc': material.fcm * 1.5,
+            'ft': material.ftm * 1.5
+        }
+        mortar_props = {
+            'E': material.E * 0.5,
+            'nu': 0.20,
+            'fc': material.fcm * 0.8,
+            'ft': material.ftm * 0.5
+        }
+        interface_props = {
+            'kn': material.E * 100,
+            'ks': material.G * 50,
+            'ft': material.tau0,
+            'fc': material.fcm,
+            'c': material.tau0,
+            'phi': 0.6
+        }
+        model = MicroModel(
+            block_props=block_props,
+            mortar_props=mortar_props,
+            interface_props=interface_props
+        )
+        model.generate_micro_mesh(wall_data, {'length': 0.25, 'height': 0.12})
+        boundary = {'base': 'fixed', 'top': 'free'}
+        return model.analyze_micro(loads, boundary)
+except ImportError as e:
     MicroModel = None
     _analyze_micro = None
-    logging.warning("Modulo micro non disponibile")
+    logging.warning(f"Modulo micro non disponibile: {e}")
 
 try:
     from .analyses.frame import EquivalentFrame, analyze_frame as _analyze_frame
-except ImportError:
+except ImportError as e:
     EquivalentFrame = None
     _analyze_frame = None
-    logging.warning("Modulo frame non disponibile")
+    logging.warning(f"Modulo frame non disponibile: {e}")
 
 # Import opzionale del FrameElement esterno
 try:

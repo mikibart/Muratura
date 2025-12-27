@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple, Optional
 from scipy.sparse import lil_matrix, csr_matrix, eye
 from scipy.sparse.linalg import spsolve, eigsh
 from .element import FrameElement
-from ..materials import MaterialProperties
+from ...materials import MaterialProperties
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
@@ -527,7 +527,7 @@ class EquivalentFrame:
                 forces = solution['element_forces'][i]
                 
                 # Calcola capacità elemento
-                if elem.element_type == "pier":
+                if elem.type == "pier":
                     capacity = self._pier_capacity(elem, forces['N'])
                 else:  # spandrel
                     capacity = self._spandrel_capacity(elem)
@@ -736,7 +736,11 @@ class EquivalentFrame:
         idx_y = np.argmin(np.abs(V - V_y_target))
         
         # Energia sotto la curva
-        E_total = np.trapz(V[:idx_y+1], delta[:idx_y+1])
+        # Compatibilità numpy (trapz deprecato in numpy 2.0)
+        try:
+            E_total = np.trapezoid(V[:idx_y+1], delta[:idx_y+1])
+        except AttributeError:
+            E_total = np.trapz(V[:idx_y+1], delta[:idx_y+1])
         
         # Ottimizza V_y per equal energy
         best_error = float('inf')
@@ -930,16 +934,93 @@ class EquivalentFrame:
 def create_frame_from_wall_data(wall_data: Dict, material: MaterialProperties) -> EquivalentFrame:
     """Crea modello di telaio equivalente da dati parete"""
     frame = EquivalentFrame()
-    
-    # Estrai geometria
+
+    # Estrai geometria - supporta sia formato complesso che semplice
     walls = wall_data.get('walls', [])
     openings = wall_data.get('openings', [])
-    floors = wall_data.get('floors', [])
-    
-    # Crea nodi agli incroci
+    floors_data = wall_data.get('floors', [])
+
+    # Se non ci sono walls ma c'è length/height, crea parete singola
+    if not walls and 'length' in wall_data:
+        L = wall_data['length']
+        H = wall_data['height']
+        t = wall_data['thickness']
+        n_floors = wall_data.get('floors', 1) if isinstance(wall_data.get('floors'), int) else 1
+
+        # Crea modello semplificato per singola parete
+        node_id = 0
+
+        # Nodi: base sinistra, base destra, e per ogni piano
+        h_floor = H / n_floors if n_floors > 0 else H
+
+        # Nodi alla base
+        frame.add_node(0, 0, 0)          # Base sinistra
+        frame.add_node(1, L, 0)          # Base destra
+        frame.add_constraint(0, "fixed")
+        frame.add_constraint(1, "fixed")
+
+        node_id = 2
+        prev_left = 0
+        prev_right = 1
+
+        # Nodi per ogni piano
+        for i in range(1, n_floors + 1):
+            y = i * h_floor
+            left_node = node_id
+            right_node = node_id + 1
+            frame.add_node(left_node, 0, y)
+            frame.add_node(right_node, L, y)
+
+            # Crea elementi pier verticali (maschi)
+            from ...geometry import GeometryPier
+
+            # Maschio sinistro (length=larghezza muro in pianta, height=altezza piano)
+            geom_left = GeometryPier(length=t, height=h_floor, thickness=t)
+            elem_left = FrameElement(
+                element_id=len(frame.elements),
+                i_node=prev_left,
+                j_node=left_node,
+                geometry=geom_left,
+                material=material,
+                element_type='pier'
+            )
+            frame.add_element(elem_left)
+
+            # Maschio destro
+            geom_right = GeometryPier(length=t, height=h_floor, thickness=t)
+            elem_right = FrameElement(
+                element_id=len(frame.elements),
+                i_node=prev_right,
+                j_node=right_node,
+                geometry=geom_right,
+                material=material,
+                element_type='pier'
+            )
+            frame.add_element(elem_right)
+
+            # Fascia orizzontale (spandrel) a ogni piano
+            from ...geometry import GeometrySpandrel
+            geom_span = GeometrySpandrel(length=L, height=h_floor*0.3, thickness=t)
+            elem_span = FrameElement(
+                element_id=len(frame.elements),
+                i_node=left_node,
+                j_node=right_node,
+                geometry=geom_span,
+                material=material,
+                element_type='spandrel'
+            )
+            frame.add_element(elem_span)
+
+            prev_left = left_node
+            prev_right = right_node
+            node_id += 2
+
+        return frame
+
+    # Formato complesso con coordinate walls
     node_id = 0
     node_map = {}  # (x,y) -> node_id
-    
+
     # Nodi da pareti
     for wall in walls:
         for point in [wall['start'], wall['end']]:
@@ -948,29 +1029,27 @@ def create_frame_from_wall_data(wall_data: Dict, material: MaterialProperties) -
                 frame.add_node(node_id, point[0], point[1])
                 node_map[key] = node_id
                 node_id += 1
-                
+
     # Nodi da solai
-    for floor in floors:
-        y = floor['level']
-        for wall in walls:
-            if wall['start'][1] <= y <= wall['end'][1] or wall['end'][1] <= y <= wall['start'][1]:
-                # Intersezione con parete
-                x = wall['start'][0]  # Assumendo parete verticale
-                key = (round(x, 3), round(y, 3))
-                if key not in node_map:
-                    frame.add_node(node_id, x, y)
-                    node_map[key] = node_id
-                    node_id += 1
-                    
-    # Crea elementi
-    # TODO: Logica completa per identificare maschi e fasce considerando aperture
-    
+    if isinstance(floors_data, list):
+        for floor in floors_data:
+            y = floor['level']
+            for wall in walls:
+                if wall['start'][1] <= y <= wall['end'][1] or wall['end'][1] <= y <= wall['start'][1]:
+                    x = wall['start'][0]
+                    key = (round(x, 3), round(y, 3))
+                    if key not in node_map:
+                        frame.add_node(node_id, x, y)
+                        node_map[key] = node_id
+                        node_id += 1
+
     # Aggiungi vincoli alla base
-    y_min = min(coord[1] for coord in node_map.keys())
-    for (x, y), nid in node_map.items():
-        if abs(y - y_min) < 0.01:
-            frame.add_constraint(nid, "fixed")
-            
+    if node_map:
+        y_min = min(coord[1] for coord in node_map.keys())
+        for (x, y), nid in node_map.items():
+            if abs(y - y_min) < 0.01:
+                frame.add_constraint(nid, "fixed")
+
     return frame
 
 
@@ -998,28 +1077,74 @@ def _analyze_frame(wall_data: Dict, material: MaterialProperties,
     }
     
     # Analisi statica (carichi verticali)
-    if 'vertical' in loads:
+    if 'vertical' in loads and loads['vertical']:
         logger.info("Esecuzione analisi statica per carichi verticali")
-        static_results = frame.solve_static(loads['vertical'])
-        results['analyses']['static'] = static_results
+        # Converti carico scalare in dict di forze nodali
+        V_load = loads['vertical']
+        if isinstance(V_load, (int, float)):
+            # Distribuisci il carico ai nodi superiori
+            if frame.nodes:
+                y_max = max(coord[1] for coord in frame.nodes.values())
+                top_nodes = [nid for nid, coord in frame.nodes.items()
+                            if abs(coord[1] - y_max) < 0.01]
+                if top_nodes:
+                    load_per_node = V_load / len(top_nodes)
+                    V_load = {nid: np.array([0, -load_per_node, 0]) for nid in top_nodes}
+                else:
+                    V_load = {}
+            else:
+                V_load = {}
+        if V_load:
+            static_results = frame.solve_static(V_load)
+            results['analyses']['static'] = static_results
         
+    # Assembla matrice di rigidezza
+    frame.assemble_stiffness_matrix()
+
     # Analisi modale
     if analysis_options.analysis_type in ['modal', 'pushover']:
         logger.info(f"Esecuzione analisi modale ({analysis_options.n_modes} modi)")
-        
+
         # Masse di piano
         floor_masses = {}
-        for floor in wall_data.get('floors', []):
-            # Trova nodi al livello del solaio
-            level_nodes = [nid for nid, coord in frame.nodes.items() 
-                          if abs(coord[1] - floor['level']) < 0.01]
-            
-            # Distribuisci massa
-            if level_nodes:
-                mass_per_node = floor.get('mass', 1000) / len(level_nodes)  # kg
-                for nid in level_nodes:
-                    floor_masses[nid] = mass_per_node
-                    
+        floors_data = wall_data.get('floors', [])
+
+        # Se floors è un intero (numero piani) invece di lista
+        if isinstance(floors_data, int):
+            n_floors = floors_data
+            H = wall_data.get('height', 3.0)
+            h_floor = H / n_floors if n_floors > 0 else H
+            default_mass = 10000  # kg per piano (stima)
+
+            for nid, coord in frame.nodes.items():
+                # Assegna massa ai nodi non alla base
+                if coord[1] > 0.01:
+                    floor_masses[nid] = default_mass / 2  # Divide per nodi sx e dx
+
+        elif isinstance(floors_data, list):
+            for floor in floors_data:
+                # Gestisce sia lista di float (quote) che lista di dict
+                if isinstance(floor, (int, float)):
+                    level = float(floor)
+                    mass = 1000  # massa default per piano
+                else:
+                    level = floor.get('level', 0)
+                    mass = floor.get('mass', 1000)
+
+                level_nodes = [nid for nid, coord in frame.nodes.items()
+                              if abs(coord[1] - level) < 0.01]
+
+                if level_nodes:
+                    mass_per_node = mass / len(level_nodes)
+                    for nid in level_nodes:
+                        floor_masses[nid] = mass_per_node
+
+        # Se non ci sono masse, usa default
+        if not floor_masses:
+            for nid, coord in frame.nodes.items():
+                if coord[1] > 0.01:
+                    floor_masses[nid] = 5000  # kg default
+
         frame.assemble_mass_matrix(floor_masses)
         modal_results = frame.solve_modal(analysis_options.n_modes)
         results['analyses']['modal'] = modal_results

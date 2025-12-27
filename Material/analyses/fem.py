@@ -197,31 +197,33 @@ class FEMModel:
         self._setup_dof_mapping()
     
     def _setup_dof_mapping(self):
-        """Inizializza la mappatura DOF quando necessario"""
-        if self.nodes and not self.dof_map:
+        """Inizializza la mappatura DOF - ricostruisce sempre per sincronizzazione"""
+        if self.nodes:
+            # Ricostruisci sempre per garantire consistenza con i nodi attuali
+            self.dof_map = {}
             for i, node_id in enumerate(sorted(self.nodes.keys())):
-                self.dof_map[node_id] = (2*i, 2*i + 1)
+                self.dof_map[int(node_id)] = (2*i, 2*i + 1)
     
     def add_node(self, node_id: int, x: float, y: float):
-        self.nodes[node_id] = np.array([x, y])
-        self._setup_dof_mapping()
+        self.nodes[int(node_id)] = np.array([x, y])
+        # dof_map viene ricostruito in assemble_global_stiffness
     
     def add_element(self, elem: FEMElement):
         # Verifica che tutti i nodi esistano
         for node_id in elem.nodes:
-            if node_id not in self.nodes:
+            if int(node_id) not in self.nodes:
                 raise ValueError(f"Nodo {node_id} non definito")
         self.elements.append(elem)
     
     def add_constraint(self, node_id: int, dofs: List[int]):
-        if node_id not in self.nodes:
+        if int(node_id) not in self.nodes:
             raise ValueError(f"Nodo {node_id} non definito per vincolo")
-        self.constraints.append({'node': node_id, 'dofs': dofs})
+        self.constraints.append({'node': int(node_id), 'dofs': dofs})
     
     def add_load(self, node_id: int, Fx: float = 0.0, Fy: float = 0.0):
-        if node_id not in self.nodes:
+        if int(node_id) not in self.nodes:
             raise ValueError(f"Nodo {node_id} non definito per carico")
-        self.loads[node_id] = np.array([Fx, Fy])
+        self.loads[int(node_id)] = np.array([Fx, Fy])
     
     def generate_mesh(self, wall_data: Dict, material: MaterialProperties, 
                      n_x: int = 10, n_y: int = 5, law: ConstitutiveLaw = ConstitutiveLaw.LINEAR):
@@ -285,10 +287,10 @@ class FEMModel:
         self.K_global = lil_matrix((n_dof, n_dof))
         
         for elem in self.elements:
-            coords = np.array([self.nodes[n] for n in elem.nodes])
+            coords = np.array([self.nodes[int(n)] for n in elem.nodes])
             elem_dofs = []
             for n in elem.nodes:
-                elem_dofs.extend(self.dof_map[n])
+                elem_dofs.extend(self.dof_map[int(n)])
             
             u_elem = None if u is None else u[elem_dofs]
             
@@ -312,7 +314,7 @@ class FEMModel:
         F_mod = F.copy()
         
         for const in self.constraints:
-            node_dofs = self.dof_map[const['node']]
+            node_dofs = self.dof_map[int(const['node'])]
             for local_dof in const['dofs']:
                 global_dof = node_dofs[local_dof]
                 K_mod[global_dof, global_dof] += penalty
@@ -326,7 +328,7 @@ class FEMModel:
         F = np.zeros(n_dof)
         
         for node_id, load in self.loads.items():
-            dofs = self.dof_map[node_id]
+            dofs = self.dof_map[int(node_id)]
             F[dofs[0]] = load[0]
             F[dofs[1]] = load[1]
         
@@ -338,10 +340,10 @@ class FEMModel:
         f_int = np.zeros(n_dof)
         
         for elem in self.elements:
-            coords = np.array([self.nodes[n] for n in elem.nodes])
+            coords = np.array([self.nodes[int(n)] for n in elem.nodes])
             elem_dofs = []
             for n in elem.nodes:
-                elem_dofs.extend(self.dof_map[n])
+                elem_dofs.extend(self.dof_map[int(n)])
             u_elem = u[elem_dofs]
             
             try:
@@ -387,7 +389,7 @@ class FEMModel:
             
             # Applica vincoli al residuo
             for const in self.constraints:
-                node_dofs = self.dof_map[const['node']]
+                node_dofs = self.dof_map[int(const['node'])]
                 for local_dof in const['dofs']:
                     global_dof = node_dofs[local_dof]
                     R[global_dof] = 0
@@ -423,10 +425,10 @@ class FEMModel:
         stresses = []
         
         for elem_idx, elem in enumerate(self.elements):
-            coords = np.array([self.nodes[n] for n in elem.nodes])
+            coords = np.array([self.nodes[int(n)] for n in elem.nodes])
             elem_dofs = []
             for n in elem.nodes:
-                elem_dofs.extend(self.dof_map[n])
+                elem_dofs.extend(self.dof_map[int(n)])
             u_elem = u[elem_dofs]
             
             try:

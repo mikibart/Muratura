@@ -10,9 +10,9 @@ from scipy.sparse import csr_matrix
 from dataclasses import dataclass
 import warnings
 
-# Assumendo che questi moduli esistano nel progetto
-from ..geometry import GeometryPier, GeometrySpandrel
-from ..materials import MaterialProperties
+# Import dalla struttura del progetto
+from ...geometry import GeometryPier, GeometrySpandrel
+from ...materials import MaterialProperties
 
 
 @dataclass
@@ -292,7 +292,44 @@ class FrameElement:
         if self.T is None:
             raise ValueError("Matrice di trasformazione non impostata")
         return self.T.T @ self.k_local @ self.T
-        
+
+    def get_mass_matrix(self) -> np.ndarray:
+        """
+        Calcola matrice di massa consistente 6x6.
+
+        Returns:
+            Matrice di massa locale [kg]
+        """
+        # Proprietà
+        if self.type == "pier":
+            L = self.geometry.height
+            A = self.geometry.area
+        else:
+            L = self.geometry.length
+            A = self.geometry.area
+
+        # Densità muratura tipica
+        rho = 1800  # kg/m³
+
+        # Massa totale elemento
+        m_tot = rho * A * L
+
+        # Matrice di massa consistente (simplified lumped)
+        m = np.zeros((6, 6))
+
+        # Masse traslazionali (metà per nodo)
+        m[0, 0] = m_tot / 2  # u1
+        m[1, 1] = m_tot / 2  # v1
+        m[3, 3] = m_tot / 2  # u2
+        m[4, 4] = m_tot / 2  # v2
+
+        # Inerzia rotazionale (piccola)
+        I_rot = m_tot * L**2 / 12
+        m[2, 2] = I_rot / 2  # θ1
+        m[5, 5] = I_rot / 2  # θ2
+
+        return m
+
     def compute_internal_forces(self, u_global: np.ndarray) -> Dict[str, float]:
         """
         Calcola forze interne dall'spostamento nodale globale.
@@ -341,11 +378,11 @@ class FrameElement:
             h = self.geometry.height
             
             # Resistenza a compressione
-            f_m = self.material.f_m * 1000  # MPa -> kPa
+            f_m = self.material.fcm * 1000  # MPa -> kPa
             capacities['N_max'] = f_m * t * b
             
             # Resistenza a taglio (criterio di Mohr-Coulomb)
-            f_v0 = self.material.f_v0 * 1000  # MPa -> kPa
+            f_v0 = self.material.tau0 * 1000  # MPa -> kPa
             mu = 0.4  # Coefficiente d'attrito
             sigma_n = 0.5 * f_m  # Tensione normale media stimata
             capacities['V_max'] = (f_v0 + mu * sigma_n) * t * b
@@ -360,11 +397,11 @@ class FrameElement:
             L = self.geometry.length
             
             # Alta capacità assiale (sempre compressa)
-            f_m = self.material.f_m * 1000
+            f_m = self.material.fcm * 1000
             capacities['N_max'] = 2 * f_m * t * h
             
             # Bassa capacità a taglio
-            f_v0 = self.material.f_v0 * 1000
+            f_v0 = self.material.tau0 * 1000
             capacities['V_max'] = f_v0 * t * h * 0.5  # Ridotta
             
             # Bassa capacità flessionale
@@ -541,8 +578,8 @@ class FrameElement:
             'material': {
                 'E': self.material.E,
                 'G': self.material.G,
-                'f_m': self.material.f_m,
-                'f_v0': self.material.f_v0
+                'f_m': self.material.fcm,
+                'f_v0': self.material.tau0
             },
             'forces': self.forces,
             'capacities': self.capacities,

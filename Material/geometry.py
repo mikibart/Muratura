@@ -550,9 +550,24 @@ class GeometryPier:
         
         x_overlap = not (x1_max < x2_min or x2_max < x1_min)
         y_overlap = not (y1_max < y2_min or y2_max < y1_min)
-        
+
         return x_overlap and y_overlap
-    
+
+    @property
+    def width(self) -> float:
+        """Larghezza sezione (alias per length) [m]"""
+        return self.length
+
+    @property
+    def area(self) -> float:
+        """Area sezione (alias per gross_area) [m²]"""
+        return self.gross_area
+
+    @property
+    def inertia(self) -> float:
+        """Momento d'inerzia (alias per gross_inertia) [m⁴]"""
+        return self.gross_inertia
+
     @property
     def gross_area(self) -> float:
         """Area lorda sezione [m²]"""
@@ -977,7 +992,12 @@ class GeometrySpandrel:
                 self.arch_type = ArchType.CIRCULAR
             else:
                 self.arch_type = ArchType.POINTED
-    
+
+    @property
+    def width(self) -> float:
+        """Larghezza sezione (alias per height) [m]"""
+        return self.height
+
     @property
     def area(self) -> float:
         """Area sezione [m²]"""

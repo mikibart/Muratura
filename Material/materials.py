@@ -596,7 +596,12 @@ class MaterialProperties:
     
     # Parametri dinamici
     damping_ratio: float = 0.05  # Coefficiente di smorzamento viscoso [-]
-    
+
+    # Parametri per analisi SAM
+    use_fvd0_for_piers: bool = False    # Usa fvd0 invece di fvd per maschi
+    use_fvd0_for_spandrels: bool = False  # Usa fvd0 invece di fvd per fasce
+    reinforcement_ratio: float = 0.0  # Percentuale armatura (per muratura armata)
+
     # Metadati
     material_type: str = ""  # Descrizione tipo muratura
     source: str = ""         # Fonte dati

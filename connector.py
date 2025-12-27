@@ -1174,6 +1174,61 @@ ESEMPIO:
                 'status': 'configured'
             }
 
+        # Processa MURI (geometria con coordinate)
+        if project.muri:
+            # Inizializza storage per muri se non esiste
+            if not hasattr(self, '_muri'):
+                self._muri = {}
+            if not hasattr(self, '_piani_dsl'):
+                self._piani_dsl = project.piani
+
+            # Raggruppa muri per piano (z)
+            piani_z = {}
+            for muro in project.muri:
+                z_key = round(muro.z, 2)
+                if z_key not in piani_z:
+                    piani_z[z_key] = []
+                piani_z[z_key].append(muro)
+
+            # Crea pareti dai muri
+            for muro in project.muri:
+                # Calcola lunghezza muro
+                import math
+                lunghezza = math.sqrt((muro.x2 - muro.x1)**2 + (muro.y2 - muro.y1)**2)
+
+                # Determina piano dalla quota z
+                piano_idx = 0
+                z_accum = 0
+                for p_idx in sorted(project.piani.keys()):
+                    if muro.z >= z_accum:
+                        piano_idx = p_idx
+                    z_accum += project.piani[p_idx].altezza
+
+                # Salva muro con coordinate
+                self._muri[muro.nome] = {
+                    'x1': muro.x1, 'y1': muro.y1,
+                    'x2': muro.x2, 'y2': muro.y2,
+                    'z': muro.z,
+                    'altezza': muro.altezza,
+                    'spessore': muro.spessore,
+                    'materiale': muro.materiale,
+                    'lunghezza': lunghezza,
+                    'piano': piano_idx
+                }
+
+                # Crea geometria maschio per ogni muro
+                nome_geom = f"{muro.nome}"
+                self.maschio(nome_geom, lunghezza, muro.altezza, muro.spessore)
+
+                # Assegna materiale
+                if muro.materiale in self.materiali:
+                    if nome_geom not in self.pareti:
+                        self.parete(nome_geom, lunghezza, muro.altezza, muro.spessore, piani=1)
+                    self.assegna_materiale(nome_geom, muro.materiale)
+
+            print(f"  Muri caricati: {len(project.muri)}")
+            print(f"  Piani definiti: {len(project.piani)}")
+
         # Riepilogo
         print(f"\nProgetto '{project.nome}' caricato da DSL:")
         print(f"  Materiali: {len(self.materiali)}")

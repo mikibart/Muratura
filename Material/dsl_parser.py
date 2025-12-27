@@ -67,12 +67,43 @@ class PianoDef:
 
 @dataclass
 class PareteDef:
-    """Definizione parete"""
+    """Definizione parete (senza coordinate)"""
     nome: str
     piano: int
     lunghezza: float  # m
     spessore: float  # m
     materiale: str  # riferimento a MaterialeDef
+
+
+@dataclass
+class MuroDef:
+    """Definizione muro con coordinate assolute"""
+    nome: str
+    x1: float  # m - punto iniziale X
+    y1: float  # m - punto iniziale Y
+    x2: float  # m - punto finale X
+    y2: float  # m - punto finale Y
+    z: float   # m - quota base (0 = terra)
+    altezza: float  # m
+    spessore: float  # m
+    materiale: str
+
+    @property
+    def lunghezza(self) -> float:
+        """Calcola lunghezza dalla distanza tra i punti"""
+        import math
+        return math.sqrt((self.x2 - self.x1)**2 + (self.y2 - self.y1)**2)
+
+    @property
+    def angolo(self) -> float:
+        """Calcola angolo in gradi rispetto all'asse X"""
+        import math
+        return math.degrees(math.atan2(self.y2 - self.y1, self.x2 - self.x1))
+
+    @property
+    def centro(self) -> tuple:
+        """Restituisce il punto centrale (x, y)"""
+        return ((self.x1 + self.x2) / 2, (self.y1 + self.y2) / 2)
 
 
 @dataclass
@@ -113,6 +144,7 @@ class DSLProject:
     materiali: Dict[str, MaterialeDef] = field(default_factory=dict)
     piani: Dict[int, PianoDef] = field(default_factory=dict)
     pareti: List[PareteDef] = field(default_factory=list)
+    muri: List[MuroDef] = field(default_factory=list)  # Muri con coordinate
     aperture: List[AperturaDef] = field(default_factory=list)
     carichi: Dict[int, CaricoDef] = field(default_factory=dict)
     analisi: List[AnalisiDef] = field(default_factory=list)
@@ -125,7 +157,8 @@ class DSLProject:
             f"Data: {self.data}" if self.data else "",
             f"Materiali: {len(self.materiali)}",
             f"Piani: {len(self.piani)}",
-            f"Pareti: {len(self.pareti)}",
+            f"Pareti: {len(self.pareti)}" if self.pareti else "",
+            f"Muri: {len(self.muri)}" if self.muri else "",
             f"Aperture: {len(self.aperture)}",
             f"Carichi: {len(self.carichi)}",
             f"Analisi: {len(self.analisi)}",
@@ -255,12 +288,24 @@ class DSLParser:
                 self._parse_materiale_custom(args, line_num)
             elif command == 'PIANO':
                 self._parse_piano(args, line_num)
+            elif command == 'PIANI':
+                self._parse_piani(args, line_num)
             elif command == 'PARETE':
                 self._parse_parete(args, line_num)
+            elif command == 'MURO':
+                self._parse_muro(args, line_num)
             elif command == 'APERTURA':
                 self._parse_apertura(args, line_num)
+            elif command == 'FINESTRA':
+                self._parse_finestra(args, line_num)
+            elif command == 'PORTA':
+                self._parse_porta(args, line_num)
             elif command == 'CARICO':
                 self._parse_carico(args, line_num)
+            elif command == 'CARICHI':
+                self._parse_carichi(args, line_num)
+            elif command == 'EDIFICIO':
+                self._parse_edificio(args, line_num)
             elif command == 'PUSHOVER':
                 self._parse_pushover(args, line_num)
             elif command == 'MODALE':
@@ -363,9 +408,275 @@ class DSLParser:
             massa=massa
         )
 
+    def _parse_piani(self, args: List[str], line_num: int):
+        """
+        PIANI n_piani altezza massa
+        Crea n piani tutti uguali (indici 0 a n-1)
+
+        Oppure con altezze/masse diverse:
+        PIANI 3 ALTEZZE 3.2,3.0,2.8 MASSE 12000,10000,8000
+        """
+        if len(args) < 3:
+            raise DSLParseError(
+                f"PIANI richiede almeno 3 parametri (n_piani altezza massa)",
+                line_num
+            )
+
+        try:
+            n_piani = int(args[0])
+
+            # Controlla se ci sono liste di valori
+            altezze = []
+            masse = []
+
+            i = 1
+            while i < len(args):
+                if args[i].upper() == 'ALTEZZE' and i + 1 < len(args):
+                    altezze = [float(x) for x in args[i + 1].split(',')]
+                    i += 2
+                elif args[i].upper() == 'MASSE' and i + 1 < len(args):
+                    masse = [float(x) for x in args[i + 1].split(',')]
+                    i += 2
+                else:
+                    # Formato semplice: PIANI n altezza massa
+                    if not altezze:
+                        altezze = [float(args[1])] * n_piani
+                    if not masse:
+                        masse = [float(args[2])] * n_piani
+                    break
+
+            # Crea i piani
+            for idx in range(n_piani):
+                alt = altezze[idx] if idx < len(altezze) else altezze[-1]
+                mas = masse[idx] if idx < len(masse) else masse[-1]
+                self.project.piani[idx] = PianoDef(indice=idx, altezza=alt, massa=mas)
+
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+    def _parse_carichi(self, args: List[str], line_num: int):
+        """
+        CARICHI permanente variabile [copertura_ultimo]
+        Applica gli stessi carichi a tutti i piani definiti
+        """
+        if len(args) < 2:
+            raise DSLParseError(
+                f"CARICHI richiede almeno 2 parametri (permanente variabile)",
+                line_num
+            )
+
+        try:
+            permanente = float(args[0])
+            variabile = float(args[1])
+            copertura_ultimo = len(args) > 2 and args[2].lower() in ('copertura', 'true', 'si')
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+        # Applica a tutti i piani
+        piani = list(self.project.piani.keys()) if self.project.piani else [0]
+        for piano in piani:
+            is_ultimo = (piano == max(piani)) if piani else False
+            self.project.carichi[piano] = CaricoDef(
+                piano=piano,
+                permanente=permanente,
+                variabile=variabile,
+                copertura=copertura_ultimo and is_ultimo
+            )
+
+    def _parse_edificio(self, args: List[str], line_num: int):
+        """
+        EDIFICIO n_piani altezza_piano massa_piano materiale pareti
+
+        Esempio:
+        EDIFICIO 3 3.0 10000 mattoni P1:5.0:0.45,P2:4.0:0.45,P3:3.5:0.30
+
+        Crea automaticamente:
+        - 3 piani (0, 1, 2) con altezza 3.0m e massa 10000kg
+        - Pareti P1, P2, P3 su tutti i piani con le dimensioni specificate
+        """
+        if len(args) < 5:
+            raise DSLParseError(
+                f"EDIFICIO richiede 5 parametri (n_piani altezza massa materiale pareti)",
+                line_num
+            )
+
+        try:
+            n_piani = int(args[0])
+            altezza = float(args[1])
+            massa = float(args[2])
+            materiale = args[3]
+            pareti_str = args[4]
+
+            # Crea i piani
+            for idx in range(n_piani):
+                self.project.piani[idx] = PianoDef(
+                    indice=idx,
+                    altezza=altezza,
+                    massa=massa
+                )
+
+            # Parsa le pareti: P1:5.0:0.45,P2:4.0:0.45
+            for parete_def in pareti_str.split(','):
+                parts = parete_def.split(':')
+                if len(parts) >= 3:
+                    nome = parts[0]
+                    lunghezza = float(parts[1])
+                    spessore = float(parts[2])
+
+                    # Crea la parete su tutti i piani
+                    for piano in range(n_piani):
+                        self.project.pareti.append(PareteDef(
+                            nome=nome,
+                            piano=piano,
+                            lunghezza=lunghezza,
+                            spessore=spessore,
+                            materiale=materiale
+                        ))
+
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+    def _parse_muro(self, args: List[str], line_num: int):
+        """
+        MURO nome x1 y1 x2 y2 z altezza spessore materiale
+
+        Esempio:
+        MURO PN 0 0 8.5 0 0 3.2 0.45 mattoni      # Parete nord piano terra
+        MURO PN 0 0 8.5 0 3.2 3.0 0.30 mattoni    # Parete nord piano 1 (z=3.2)
+        MURO PS 0 6 8.5 6 0 3.2 0.45 mattoni      # Parete sud
+        """
+        if len(args) < 9:
+            raise DSLParseError(
+                f"MURO richiede 9 parametri (nome x1 y1 x2 y2 z altezza spessore materiale), trovati {len(args)}",
+                line_num
+            )
+
+        try:
+            nome = args[0]
+            x1 = float(args[1])
+            y1 = float(args[2])
+            x2 = float(args[3])
+            y2 = float(args[4])
+            z = float(args[5])
+            altezza = float(args[6])
+            spessore = float(args[7])
+            materiale = args[8]
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+        self.project.muri.append(MuroDef(
+            nome=nome,
+            x1=x1, y1=y1,
+            x2=x2, y2=y2,
+            z=z,
+            altezza=altezza,
+            spessore=spessore,
+            materiale=materiale
+        ))
+
+    def _parse_finestra(self, args: List[str], line_num: int):
+        """
+        FINESTRA muro larghezza altezza distanza_da_inizio quota_da_z
+
+        Esempio:
+        FINESTRA PN 1.2 1.4 2.0 0.9   # Finestra su muro PN, larga 1.2, alta 1.4
+                                       # a 2.0m dall'inizio del muro, 0.9m da terra
+        """
+        if len(args) < 5:
+            raise DSLParseError(
+                f"FINESTRA richiede 5 parametri (muro larghezza altezza distanza quota), trovati {len(args)}",
+                line_num
+            )
+
+        try:
+            muro = args[0]
+            larghezza = float(args[1])
+            altezza = float(args[2])
+            distanza = float(args[3])  # distanza dall'inizio del muro
+            quota = float(args[4])      # quota dalla base del muro
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+        # Trova il muro di riferimento per calcolare la posizione x
+        muro_ref = next((m for m in self.project.muri if m.nome == muro), None)
+        if muro_ref:
+            # Calcola posizione x relativa al centro del muro
+            x_centro = distanza - muro_ref.lunghezza / 2
+            # Usa z del muro come riferimento piano
+            piano = int(muro_ref.z / 3.0)  # Stima piano dalla quota
+        else:
+            x_centro = distanza
+            piano = 0
+
+        self.project.aperture.append(AperturaDef(
+            parete=muro,
+            piano=piano,
+            tipo='finestra',
+            larghezza=larghezza,
+            altezza=altezza,
+            x=x_centro,
+            y=quota
+        ))
+
+    def _parse_porta(self, args: List[str], line_num: int):
+        """
+        PORTA muro larghezza altezza distanza_da_inizio
+
+        Esempio:
+        PORTA PN 0.9 2.1 4.0   # Porta su muro PN, a 4.0m dall'inizio
+        """
+        if len(args) < 4:
+            raise DSLParseError(
+                f"PORTA richiede 4 parametri (muro larghezza altezza distanza), trovati {len(args)}",
+                line_num
+            )
+
+        try:
+            muro = args[0]
+            larghezza = float(args[1])
+            altezza = float(args[2])
+            distanza = float(args[3])
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+        muro_ref = next((m for m in self.project.muri if m.nome == muro), None)
+        if muro_ref:
+            x_centro = distanza - muro_ref.lunghezza / 2
+            piano = int(muro_ref.z / 3.0)
+        else:
+            x_centro = distanza
+            piano = 0
+
+        self.project.aperture.append(AperturaDef(
+            parete=muro,
+            piano=piano,
+            tipo='porta',
+            larghezza=larghezza,
+            altezza=altezza,
+            x=x_centro,
+            y=0.0  # Porte partono da terra
+        ))
+
+    def _parse_range(self, value: str) -> List[int]:
+        """
+        Parsa un range di piani: '0:2' o '0-2' -> [0, 1, 2], '1' -> [1]
+        Supporta anche '*' per tutti i piani definiti.
+        """
+        value = value.strip()
+        if value == '*':
+            return list(self.project.piani.keys()) if self.project.piani else [0]
+        if ':' in value:
+            start, end = value.split(':')
+            return list(range(int(start), int(end) + 1))
+        if '-' in value and not value.startswith('-'):
+            start, end = value.split('-')
+            return list(range(int(start), int(end) + 1))
+        return [int(value)]
+
     def _parse_parete(self, args: List[str], line_num: int):
         """
         PARETE nome piano lunghezza spessore materiale
+        Supporta range piani: PARETE P1 0:2 5.0 0.45 mattoni
         """
         if len(args) < 5:
             raise DSLParseError(
@@ -375,24 +686,27 @@ class DSLParser:
 
         try:
             nome = args[0]
-            piano = int(args[1])
+            piani = self._parse_range(args[1])
             lunghezza = float(args[2])
             spessore = float(args[3])
             materiale = args[4]
         except ValueError as e:
             raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
 
-        self.project.pareti.append(PareteDef(
-            nome=nome,
-            piano=piano,
-            lunghezza=lunghezza,
-            spessore=spessore,
-            materiale=materiale
-        ))
+        # Crea una parete per ogni piano nel range
+        for piano in piani:
+            self.project.pareti.append(PareteDef(
+                nome=nome,
+                piano=piano,
+                lunghezza=lunghezza,
+                spessore=spessore,
+                materiale=materiale
+            ))
 
     def _parse_apertura(self, args: List[str], line_num: int):
         """
         APERTURA parete piano tipo larghezza altezza x y
+        Supporta range piani: APERTURA P1 0:2 finestra 1.2 1.4 0 0.9
         """
         if len(args) < 7:
             raise DSLParseError(
@@ -402,7 +716,7 @@ class DSLParser:
 
         try:
             parete = args[0]
-            piano = int(args[1])
+            piani = self._parse_range(args[1])
             tipo = args[2].lower()
             larghezza = float(args[3])
             altezza = float(args[4])
@@ -411,15 +725,17 @@ class DSLParser:
         except ValueError as e:
             raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
 
-        self.project.aperture.append(AperturaDef(
-            parete=parete,
-            piano=piano,
-            tipo=tipo,
-            larghezza=larghezza,
-            altezza=altezza,
-            x=x,
-            y=y
-        ))
+        # Crea un'apertura per ogni piano nel range
+        for piano in piani:
+            self.project.aperture.append(AperturaDef(
+                parete=parete,
+                piano=piano,
+                tipo=tipo,
+                larghezza=larghezza,
+                altezza=altezza,
+                x=x,
+                y=y
+            ))
 
     def _parse_carico(self, args: List[str], line_num: int):
         """
@@ -530,6 +846,14 @@ class DSLParser:
                     f"materiale '{parete.materiale}' non definito"
                 )
 
+        # Verifica riferimenti materiali nei muri
+        for muro in self.project.muri:
+            if muro.materiale not in self.project.materiali:
+                self.errors.append(
+                    f"Muro '{muro.nome}' z={muro.z}: "
+                    f"materiale '{muro.materiale}' non definito"
+                )
+
         # Verifica riferimenti piani nelle pareti
         for parete in self.project.pareti:
             if parete.piano not in self.project.piani:
@@ -537,9 +861,15 @@ class DSLParser:
                     f"Parete '{parete.nome}': piano {parete.piano} non definito esplicitamente"
                 )
 
-        # Verifica riferimenti pareti nelle aperture
+        # Verifica riferimenti pareti/muri nelle aperture
         parete_keys = {(p.nome, p.piano) for p in self.project.pareti}
+        muro_nomi = {m.nome for m in self.project.muri}
+
         for apertura in self.project.aperture:
+            # Se esiste un muro con quel nome, l'apertura e' valida
+            if apertura.parete in muro_nomi:
+                continue
+            # Altrimenti cerca nelle pareti tradizionali
             if (apertura.parete, apertura.piano) not in parete_keys:
                 self.errors.append(
                     f"Apertura su parete '{apertura.parete}' piano {apertura.piano}: "
@@ -768,6 +1098,195 @@ def parse_dsl_string(content: str) -> DSLProject:
         return load_dsl(temp_path)
     finally:
         Path(temp_path).unlink()
+
+
+# ============================================================================
+# WIZARD INTERATTIVO
+# ============================================================================
+
+def genera_edificio(
+    nome_progetto: str,
+    n_piani: int,
+    pareti: List[Dict],
+    materiale: str = "MATTONI_PIENI",
+    malta: str = "BUONA",
+    conservazione: str = "BUONO",
+    altezza_piano: float = 3.0,
+    massa_piano: float = 10000,
+    carico_permanente: float = 5.0,
+    carico_variabile: float = 2.0,
+    output_file: str = None
+) -> str:
+    """
+    Genera un file DSL per un edificio completo.
+
+    Args:
+        nome_progetto: Nome del progetto
+        n_piani: Numero di piani
+        pareti: Lista di dict con definizione pareti:
+                [{'nome': 'P1', 'lunghezza': 5.0, 'spessore': 0.45}, ...]
+        materiale: Tipo muratura NTC (default: MATTONI_PIENI)
+        malta: Qualita' malta (default: BUONA)
+        conservazione: Stato conservazione (default: BUONO)
+        altezza_piano: Altezza interpiano in m (default: 3.0)
+        massa_piano: Massa per piano in kg (default: 10000)
+        carico_permanente: Carico permanente kN/m2 (default: 5.0)
+        carico_variabile: Carico variabile kN/m2 (default: 2.0)
+        output_file: Percorso file output (opzionale)
+
+    Returns:
+        Contenuto del file DSL generato
+
+    Esempio:
+        content = genera_edificio(
+            "Casa Rossi",
+            n_piani=3,
+            pareti=[
+                {'nome': 'PN', 'lunghezza': 8.0, 'spessore': 0.45},
+                {'nome': 'PS', 'lunghezza': 8.0, 'spessore': 0.45},
+                {'nome': 'PE', 'lunghezza': 6.0, 'spessore': 0.45},
+                {'nome': 'PO', 'lunghezza': 6.0, 'spessore': 0.45},
+            ],
+            output_file="casa_rossi.mur"
+        )
+    """
+    lines = []
+
+    # Header
+    lines.append("# " + "=" * 60)
+    lines.append(f"# Progetto: {nome_progetto}")
+    lines.append(f"# Generato automaticamente con genera_edificio()")
+    lines.append("# " + "=" * 60)
+    lines.append("")
+
+    # Progetto
+    lines.append(f'PROGETTO "{nome_progetto}"')
+    lines.append("")
+
+    # Materiale
+    lines.append("# MATERIALE")
+    lines.append(f"MATERIALE muratura {materiale} {malta} {conservazione}")
+    lines.append("")
+
+    # Piani (usando sintassi compatta)
+    lines.append("# PIANI")
+    lines.append(f"PIANI {n_piani} {altezza_piano} {massa_piano}")
+    lines.append("")
+
+    # Pareti (usando range)
+    lines.append("# PARETI")
+    for p in pareti:
+        nome = p.get('nome', 'P')
+        lunghezza = p.get('lunghezza', 5.0)
+        spessore = p.get('spessore', 0.45)
+        lines.append(f"PARETE {nome} 0:{n_piani-1} {lunghezza} {spessore} muratura")
+    lines.append("")
+
+    # Carichi
+    lines.append("# CARICHI")
+    lines.append(f"CARICHI {carico_permanente} {carico_variabile} copertura")
+    lines.append("")
+
+    # Analisi standard
+    lines.append("# ANALISI")
+    lines.append("PUSHOVER push_X X triangular 0.04")
+    lines.append("PUSHOVER push_Y Y triangular 0.04")
+    lines.append("MODALE modale 6")
+    lines.append("")
+
+    content = "\n".join(lines)
+
+    # Salva su file se richiesto
+    if output_file:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"File generato: {output_file}")
+
+    return content
+
+
+def wizard_dsl() -> str:
+    """
+    Wizard interattivo per creare un file DSL.
+
+    Returns:
+        Contenuto del file DSL generato
+    """
+    print("\n" + "=" * 60)
+    print("   WIZARD CREAZIONE EDIFICIO IN MURATURA")
+    print("=" * 60 + "\n")
+
+    # Nome progetto
+    nome = input("Nome progetto: ").strip() or "Nuovo Edificio"
+
+    # Piani
+    while True:
+        try:
+            n_piani = int(input("Numero di piani [3]: ").strip() or "3")
+            break
+        except ValueError:
+            print("Inserisci un numero valido")
+
+    altezza = float(input("Altezza interpiano in m [3.0]: ").strip() or "3.0")
+    massa = float(input("Massa per piano in kg [10000]: ").strip() or "10000")
+
+    # Materiale
+    print("\nTipi muratura disponibili:")
+    tipi = [
+        "MATTONI_PIENI", "MATTONI_SEMIPIENI", "PIETRA_SQUADRATA",
+        "PIETRA_IRREGOLARE", "BLOCCHI_LATERIZIO", "BLOCCHI_CLS"
+    ]
+    for i, t in enumerate(tipi, 1):
+        print(f"  {i}. {t}")
+
+    scelta = input("Scegli tipo muratura [1]: ").strip() or "1"
+    materiale = tipi[int(scelta) - 1] if scelta.isdigit() and 1 <= int(scelta) <= len(tipi) else tipi[0]
+
+    # Pareti
+    print("\nDefinisci le pareti (invio vuoto per terminare):")
+    pareti = []
+    i = 1
+    while True:
+        nome_p = input(f"  Nome parete {i} (es. PN, PS, PE, PO): ").strip()
+        if not nome_p:
+            if not pareti:
+                print("  Devi definire almeno una parete!")
+                continue
+            break
+
+        lungh = float(input(f"  Lunghezza {nome_p} in m [5.0]: ").strip() or "5.0")
+        spess = float(input(f"  Spessore {nome_p} in m [0.45]: ").strip() or "0.45")
+
+        pareti.append({'nome': nome_p, 'lunghezza': lungh, 'spessore': spess})
+        i += 1
+
+    # Carichi
+    print("\nCarichi:")
+    perm = float(input("  Carico permanente kN/m2 [5.0]: ").strip() or "5.0")
+    var = float(input("  Carico variabile kN/m2 [2.0]: ").strip() or "2.0")
+
+    # Output
+    output = input("\nFile output (invio per solo visualizzare): ").strip() or None
+
+    # Genera
+    content = genera_edificio(
+        nome_progetto=nome,
+        n_piani=n_piani,
+        pareti=pareti,
+        materiale=materiale,
+        altezza_piano=altezza,
+        massa_piano=massa,
+        carico_permanente=perm,
+        carico_variabile=var,
+        output_file=output
+    )
+
+    print("\n" + "=" * 60)
+    print("FILE DSL GENERATO:")
+    print("=" * 60)
+    print(content)
+
+    return content
 
 
 # ============================================================================
