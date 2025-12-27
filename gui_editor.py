@@ -139,6 +139,36 @@ class Carico:
 
 
 @dataclass
+class Cordolo:
+    """Rappresenta un cordolo (ring beam)"""
+    nome: str
+    piano: int
+    base: float  # larghezza sezione [m]
+    altezza: float  # altezza sezione [m]
+    materiale: str = "calcestruzzo"
+    # Coordinate opzionali (se None, cordolo perimetrale)
+    x1: Optional[float] = None
+    y1: Optional[float] = None
+    x2: Optional[float] = None
+    y2: Optional[float] = None
+    selected: bool = False
+
+    @property
+    def is_perimetrale(self) -> bool:
+        return self.x1 is None
+
+    @property
+    def area(self) -> float:
+        return self.base * self.altezza
+
+    @property
+    def lunghezza(self) -> float:
+        if self.x1 is not None:
+            return math.sqrt((self.x2 - self.x1)**2 + (self.y2 - self.y1)**2)
+        return 0.0
+
+
+@dataclass
 class Progetto:
     """Contiene tutti i dati del progetto"""
     nome: str = "Nuovo Progetto"
@@ -148,6 +178,7 @@ class Progetto:
     materiali: List[Materiale] = field(default_factory=list)
     piani: List[Piano] = field(default_factory=list)
     carichi: List[Carico] = field(default_factory=list)
+    cordoli: List[Cordolo] = field(default_factory=list)
     filepath: str = ""
 
 
@@ -1098,6 +1129,34 @@ class PannelloProprietà(QWidget):
 
         self.tabs.addTab(self.tab_carichi, "Carichi")
 
+        # Tab Cordoli
+        self.tab_cordoli = QWidget()
+        layout_cordoli = QVBoxLayout(self.tab_cordoli)
+        self.tabella_cordoli = QTableWidget()
+        self.tabella_cordoli.setColumnCount(7)
+        self.tabella_cordoli.setHorizontalHeaderLabels([
+            "Nome", "Piano", "Base (m)", "Altezza (m)", "Materiale", "Tipo", "L (m)"
+        ])
+        self.tabella_cordoli.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout_cordoli.addWidget(self.tabella_cordoli)
+
+        btn_layout_cordoli = QHBoxLayout()
+        btn_add_cordolo = QPushButton("+ Cordolo Perimetrale")
+        btn_add_cordolo.clicked.connect(self.aggiungiCordolo)
+        btn_layout_cordoli.addWidget(btn_add_cordolo)
+
+        btn_add_cordolo_linea = QPushButton("+ Cordolo Lineare")
+        btn_add_cordolo_linea.clicked.connect(self.aggiungiCordoloLinea)
+        btn_layout_cordoli.addWidget(btn_add_cordolo_linea)
+
+        btn_del_cordolo = QPushButton("- Rimuovi")
+        btn_del_cordolo.clicked.connect(self.rimuoviCordolo)
+        btn_layout_cordoli.addWidget(btn_del_cordolo)
+
+        layout_cordoli.addLayout(btn_layout_cordoli)
+
+        self.tabs.addTab(self.tab_cordoli, "Cordoli")
+
         layout.addWidget(self.tabs)
 
     def setProgetto(self, progetto: Progetto):
@@ -1110,6 +1169,7 @@ class PannelloProprietà(QWidget):
         self.aggiornaTabellaMateriali()
         self.aggiornaTabelllaPiani()
         self.aggiornaTabelllaCarichi()
+        self.aggiornaTabelllaCordoli()
 
     def aggiornaTabelllaMuri(self):
         if not self.progetto:
@@ -1229,6 +1289,159 @@ class PannelloProprietà(QWidget):
             self.tabella_carichi.setItem(i, 1, QTableWidgetItem(f"{carico.permanente:.1f}"))
             self.tabella_carichi.setItem(i, 2, QTableWidgetItem(f"{carico.variabile:.1f}"))
             self.tabella_carichi.setItem(i, 3, QTableWidgetItem("Si" if carico.copertura else "No"))
+
+    def aggiornaTabelllaCordoli(self):
+        if not self.progetto:
+            return
+
+        self.tabella_cordoli.setRowCount(len(self.progetto.cordoli))
+        for i, cordolo in enumerate(self.progetto.cordoli):
+            self.tabella_cordoli.setItem(i, 0, QTableWidgetItem(cordolo.nome))
+            self.tabella_cordoli.setItem(i, 1, QTableWidgetItem(str(cordolo.piano)))
+            self.tabella_cordoli.setItem(i, 2, QTableWidgetItem(f"{cordolo.base:.2f}"))
+            self.tabella_cordoli.setItem(i, 3, QTableWidgetItem(f"{cordolo.altezza:.2f}"))
+            self.tabella_cordoli.setItem(i, 4, QTableWidgetItem(cordolo.materiale))
+            tipo = "Perimetrale" if cordolo.is_perimetrale else "Lineare"
+            self.tabella_cordoli.setItem(i, 5, QTableWidgetItem(tipo))
+            lunghezza = cordolo.lunghezza if not cordolo.is_perimetrale else 0.0
+            self.tabella_cordoli.setItem(i, 6, QTableWidgetItem(f"{lunghezza:.2f}"))
+
+    def aggiungiCordolo(self):
+        """Aggiunge un cordolo perimetrale"""
+        if not self.progetto:
+            return
+
+        # Seleziona piano
+        piani_disponibili = [str(p.indice) for p in self.progetto.piani]
+        if not piani_disponibili:
+            piani_disponibili = ["0", "1", "2"]
+
+        piano_str, ok = QInputDialog.getItem(
+            self, "Piano", "Seleziona piano:",
+            piani_disponibili, 0, False
+        )
+        if not ok:
+            return
+
+        nome, ok = QInputDialog.getText(
+            self, "Nome Cordolo", "Nome:",
+            text=f"C{piano_str}"
+        )
+        if not ok or not nome:
+            return
+
+        base, ok = QInputDialog.getDouble(
+            self, "Base", "Base sezione (m):",
+            0.30, 0.10, 1.0, 2
+        )
+        if not ok:
+            return
+
+        altezza, ok = QInputDialog.getDouble(
+            self, "Altezza", "Altezza sezione (m):",
+            0.25, 0.10, 1.0, 2
+        )
+        if not ok:
+            return
+
+        materiali = ["calcestruzzo", "acciaio", "legno"]
+        materiale, ok = QInputDialog.getItem(
+            self, "Materiale", "Materiale cordolo:",
+            materiali, 0, False
+        )
+        if not ok:
+            return
+
+        cordolo = Cordolo(
+            nome=nome,
+            piano=int(piano_str),
+            base=base,
+            altezza=altezza,
+            materiale=materiale
+        )
+        self.progetto.cordoli.append(cordolo)
+        self.aggiornaTabelllaCordoli()
+
+    def aggiungiCordoloLinea(self):
+        """Aggiunge un cordolo con coordinate specifiche"""
+        if not self.progetto:
+            return
+
+        # Seleziona piano
+        piani_disponibili = [str(p.indice) for p in self.progetto.piani]
+        if not piani_disponibili:
+            piani_disponibili = ["0", "1", "2"]
+
+        piano_str, ok = QInputDialog.getItem(
+            self, "Piano", "Seleziona piano:",
+            piani_disponibili, 0, False
+        )
+        if not ok:
+            return
+
+        nome, ok = QInputDialog.getText(
+            self, "Nome Cordolo", "Nome:",
+            text=f"CL{piano_str}"
+        )
+        if not ok or not nome:
+            return
+
+        # Coordinate
+        x1, ok = QInputDialog.getDouble(self, "X1", "X1 (m):", 0.0, -100, 100, 2)
+        if not ok:
+            return
+        y1, ok = QInputDialog.getDouble(self, "Y1", "Y1 (m):", 0.0, -100, 100, 2)
+        if not ok:
+            return
+        x2, ok = QInputDialog.getDouble(self, "X2", "X2 (m):", 5.0, -100, 100, 2)
+        if not ok:
+            return
+        y2, ok = QInputDialog.getDouble(self, "Y2", "Y2 (m):", 0.0, -100, 100, 2)
+        if not ok:
+            return
+
+        base, ok = QInputDialog.getDouble(
+            self, "Base", "Base sezione (m):",
+            0.30, 0.10, 1.0, 2
+        )
+        if not ok:
+            return
+
+        altezza, ok = QInputDialog.getDouble(
+            self, "Altezza", "Altezza sezione (m):",
+            0.25, 0.10, 1.0, 2
+        )
+        if not ok:
+            return
+
+        materiali = ["calcestruzzo", "acciaio", "legno"]
+        materiale, ok = QInputDialog.getItem(
+            self, "Materiale", "Materiale cordolo:",
+            materiali, 0, False
+        )
+        if not ok:
+            return
+
+        cordolo = Cordolo(
+            nome=nome,
+            piano=int(piano_str),
+            base=base,
+            altezza=altezza,
+            materiale=materiale,
+            x1=x1, y1=y1, x2=x2, y2=y2
+        )
+        self.progetto.cordoli.append(cordolo)
+        self.aggiornaTabelllaCordoli()
+
+    def rimuoviCordolo(self):
+        """Rimuove il cordolo selezionato"""
+        if not self.progetto:
+            return
+
+        row = self.tabella_cordoli.currentRow()
+        if row >= 0 and row < len(self.progetto.cordoli):
+            del self.progetto.cordoli[row]
+            self.aggiornaTabelllaCordoli()
 
     def aggiungiPiano(self):
         if not self.progetto:
@@ -1842,6 +2055,20 @@ class MuraturaEditor(QMainWindow):
                     copertura=carico_def.copertura
                 ))
 
+            # Cordoli
+            for cordolo_def in dsl_project.cordoli:
+                self.progetto.cordoli.append(Cordolo(
+                    nome=cordolo_def.nome,
+                    piano=cordolo_def.piano,
+                    base=cordolo_def.base,
+                    altezza=cordolo_def.altezza,
+                    materiale=cordolo_def.materiale,
+                    x1=cordolo_def.x1,
+                    y1=cordolo_def.y1,
+                    x2=cordolo_def.x2,
+                    y2=cordolo_def.y2
+                ))
+
             self.canvas.setProgetto(self.progetto)
             self.pannello.setProgetto(self.progetto)
             self.aggiornaPianoCombo()
@@ -1923,6 +2150,23 @@ class MuraturaEditor(QMainWindow):
                     lines.append(
                         f"CARICO {carico.piano} {carico.permanente:.1f} {carico.variabile:.1f}{copertura_str}"
                     )
+                lines.append("")
+
+            # Cordoli
+            if self.progetto.cordoli:
+                lines.append("# CORDOLI")
+                for cordolo in self.progetto.cordoli:
+                    if cordolo.is_perimetrale:
+                        lines.append(
+                            f"CORDOLO {cordolo.nome} {cordolo.piano} "
+                            f"{cordolo.base:.2f} {cordolo.altezza:.2f} {cordolo.materiale}"
+                        )
+                    else:
+                        lines.append(
+                            f"CORDOLO_LINEA {cordolo.nome} {cordolo.piano} "
+                            f"{cordolo.base:.2f} {cordolo.altezza:.2f} {cordolo.materiale} "
+                            f"{cordolo.x1:.2f} {cordolo.y1:.2f} {cordolo.x2:.2f} {cordolo.y2:.2f}"
+                        )
                 lines.append("")
 
             with open(filepath, 'w', encoding='utf-8') as f:

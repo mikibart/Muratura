@@ -136,6 +136,36 @@ class AnalisiDef:
 
 
 @dataclass
+class CordoloDef:
+    """Definizione cordolo (ring beam)"""
+    nome: str
+    piano: int  # piano su cui è posizionato (alla sommità)
+    base: float  # larghezza sezione [m]
+    altezza: float  # altezza sezione [m]
+    materiale: str  # es. calcestruzzo, acciaio
+    # Coordinate opzionali (se None, cordolo perimetrale)
+    x1: Optional[float] = None
+    y1: Optional[float] = None
+    x2: Optional[float] = None
+    y2: Optional[float] = None
+
+    @property
+    def is_perimetrale(self) -> bool:
+        """True se è un cordolo perimetrale (senza coordinate specifiche)"""
+        return self.x1 is None
+
+    @property
+    def area(self) -> float:
+        """Area sezione [m²]"""
+        return self.base * self.altezza
+
+    @property
+    def inerzia(self) -> float:
+        """Momento d'inerzia [m⁴]"""
+        return self.base * self.altezza**3 / 12
+
+
+@dataclass
 class DSLProject:
     """Progetto completo parsato dal DSL"""
     nome: str = "Senza nome"
@@ -146,6 +176,7 @@ class DSLProject:
     pareti: List[PareteDef] = field(default_factory=list)
     muri: List[MuroDef] = field(default_factory=list)  # Muri con coordinate
     aperture: List[AperturaDef] = field(default_factory=list)
+    cordoli: List[CordoloDef] = field(default_factory=list)  # Cordoli
     carichi: Dict[int, CaricoDef] = field(default_factory=dict)
     analisi: List[AnalisiDef] = field(default_factory=list)
 
@@ -160,6 +191,7 @@ class DSLProject:
             f"Pareti: {len(self.pareti)}" if self.pareti else "",
             f"Muri: {len(self.muri)}" if self.muri else "",
             f"Aperture: {len(self.aperture)}",
+            f"Cordoli: {len(self.cordoli)}" if self.cordoli else "",
             f"Carichi: {len(self.carichi)}",
             f"Analisi: {len(self.analisi)}",
         ]
@@ -181,8 +213,11 @@ class DSLParser:
 
     # Comandi riconosciuti
     COMMANDS = {
-        'PROGETTO', 'MATERIALE', 'MATERIALE_CUSTOM', 'PIANO',
-        'PARETE', 'APERTURA', 'CARICO', 'PUSHOVER', 'MODALE', 'STATICA'
+        'PROGETTO', 'MATERIALE', 'MATERIALE_CUSTOM', 'PIANO', 'PIANI',
+        'PARETE', 'MURO', 'APERTURA', 'FINESTRA', 'PORTA',
+        'CARICO', 'CARICHI', 'EDIFICIO',
+        'PUSHOVER', 'MODALE', 'STATICA',
+        'CORDOLO', 'CORDOLO_LINEA'
     }
 
     def __init__(self, filepath: str):
@@ -312,6 +347,10 @@ class DSLParser:
                 self._parse_modale(args, line_num)
             elif command == 'STATICA':
                 self._parse_statica(args, line_num)
+            elif command == 'CORDOLO':
+                self._parse_cordolo(args, line_num)
+            elif command == 'CORDOLO_LINEA':
+                self._parse_cordolo_linea(args, line_num)
             else:
                 self.warnings.append(f"Riga {line_num}: Comando sconosciuto '{command}'")
         except Exception as e:
@@ -836,6 +875,84 @@ class DSLParser:
             parametri={'carichi': carichi}
         ))
 
+    def _parse_cordolo(self, args: List[str], line_num: int):
+        """
+        CORDOLO nome piano base altezza [materiale]
+
+        Cordolo perimetrale su tutto il piano (alla sommità delle pareti).
+        Se materiale non specificato, usa 'calcestruzzo'.
+
+        Esempio:
+        CORDOLO C1 0 0.30 0.25                  # Piano 0, sezione 30x25cm, cls
+        CORDOLO C2 1 0.30 0.25 calcestruzzo    # Piano 1, sezione 30x25cm
+        CORDOLO C3 2 0.25 0.20 acciaio         # Piano 2, sezione 25x20cm, acciaio
+        """
+        if len(args) < 4:
+            raise DSLParseError(
+                f"CORDOLO richiede almeno 4 parametri (nome piano base altezza [materiale]), "
+                f"trovati {len(args)}",
+                line_num
+            )
+
+        try:
+            nome = args[0]
+            piano = int(args[1])
+            base = float(args[2])
+            altezza = float(args[3])
+            materiale = args[4] if len(args) > 4 else 'calcestruzzo'
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+        self.project.cordoli.append(CordoloDef(
+            nome=nome,
+            piano=piano,
+            base=base,
+            altezza=altezza,
+            materiale=materiale
+        ))
+
+    def _parse_cordolo_linea(self, args: List[str], line_num: int):
+        """
+        CORDOLO_LINEA nome piano base altezza materiale x1 y1 x2 y2
+
+        Cordolo con coordinate specifiche (non perimetrale).
+
+        Esempio:
+        CORDOLO_LINEA CL1 0 0.30 0.25 calcestruzzo 0 0 10 0
+        # Piano 0, sezione 30x25cm, da (0,0) a (10,0)
+        """
+        if len(args) < 9:
+            raise DSLParseError(
+                f"CORDOLO_LINEA richiede 9 parametri "
+                f"(nome piano base altezza materiale x1 y1 x2 y2), "
+                f"trovati {len(args)}",
+                line_num
+            )
+
+        try:
+            nome = args[0]
+            piano = int(args[1])
+            base = float(args[2])
+            altezza = float(args[3])
+            materiale = args[4]
+            x1 = float(args[5])
+            y1 = float(args[6])
+            x2 = float(args[7])
+            y2 = float(args[8])
+
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+        self.project.cordoli.append(CordoloDef(
+            nome=nome,
+            piano=piano,
+            base=base,
+            altezza=altezza,
+            materiale=materiale,
+            x1=x1, y1=y1,
+            x2=x2, y2=y2
+        ))
+
     def _validate(self):
         """Validazione semantica del progetto"""
         # Verifica riferimenti materiali nelle pareti
@@ -874,6 +991,15 @@ class DSLParser:
                 self.errors.append(
                     f"Apertura su parete '{apertura.parete}' piano {apertura.piano}: "
                     f"parete non definita"
+                )
+
+        # Verifica cordoli
+        for cordolo in self.project.cordoli:
+            # I cordoli usano materiali speciali (calcestruzzo, acciaio) non nella lista materiali muratura
+            # quindi non verifichiamo il materiale, ma solo il piano
+            if cordolo.piano not in self.project.piani and self.project.piani:
+                self.warnings.append(
+                    f"Cordolo '{cordolo.nome}': piano {cordolo.piano} non definito esplicitamente"
                 )
 
 
@@ -995,6 +1121,40 @@ class DSLExporter:
                 spessore = p['thickness']
                 for piano in range(n_floors):
                     lines.append(f"PARETE {nome} {piano} {lunghezza:.2f} {spessore:.2f} {mat}")
+            lines.append("")
+
+        # Cordoli
+        if hasattr(self.m, 'cordoli') and self.m.cordoli:
+            lines.append("# CORDOLI")
+            for cordolo in self.m.cordoli:
+                if isinstance(cordolo, dict):
+                    nome = cordolo.get('nome', 'C1')
+                    piano = cordolo.get('piano', 0)
+                    base = cordolo.get('base', 0.3)
+                    altezza = cordolo.get('altezza', 0.25)
+                    materiale = cordolo.get('materiale', 'calcestruzzo')
+                    x1 = cordolo.get('x1')
+                    y1 = cordolo.get('y1')
+                    x2 = cordolo.get('x2')
+                    y2 = cordolo.get('y2')
+                else:
+                    # Se è un oggetto CordoloDef
+                    nome = cordolo.nome
+                    piano = cordolo.piano
+                    base = cordolo.base
+                    altezza = cordolo.altezza
+                    materiale = cordolo.materiale
+                    x1 = cordolo.x1
+                    y1 = cordolo.y1
+                    x2 = cordolo.x2
+                    y2 = cordolo.y2
+
+                if x1 is not None:
+                    # Cordolo con coordinate
+                    lines.append(f"CORDOLO_LINEA {nome} {piano} {base:.2f} {altezza:.2f} {materiale} {x1:.2f} {y1:.2f} {x2:.2f} {y2:.2f}")
+                else:
+                    # Cordolo perimetrale
+                    lines.append(f"CORDOLO {nome} {piano} {base:.2f} {altezza:.2f} {materiale}")
             lines.append("")
 
         # Carichi (evita duplicati)

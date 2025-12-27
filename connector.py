@@ -46,6 +46,7 @@ class Muratura:
         self.materiali: Dict[str, Any] = {}
         self.geometrie: Dict[str, Any] = {}
         self.pareti: Dict[str, Dict] = {}
+        self.cordoli: List[Dict] = []  # Cordoli (ring beams)
         self.analisi: Dict[str, Dict] = {}
         self.risultati: Dict[str, Any] = {}
 
@@ -143,6 +144,12 @@ class Muratura:
 ║    m.assegna_materiale(parete, mat)- Assegna materiale       ║
 ║    m.massa_piano(parete, piano, kg)- Assegna massa           ║
 ║    m.mostra_parete(nome)           - Dettagli parete         ║
+║                                                              ║
+║  CORDOLI (RING BEAMS)                                        ║
+║    m.cordolo(nome, piano, b, h)    - Cordolo perimetrale     ║
+║    m.cordolo_linea(nome, p, x1,y1,x2,y2) - Cordolo lineare   ║
+║    m.lista_cordoli()               - Lista cordoli           ║
+║    m.rimuovi_cordolo(nome)         - Rimuovi cordolo         ║
 ║                                                              ║
 ║  ANALISI                                                     ║
 ║    m.pushover(parete, pattern)     - Analisi pushover        ║
@@ -304,6 +311,14 @@ ESEMPIO:
                 print(f"  - {nome}: {parete['length']}x{parete['height']}m, mat={mat}")
         else:
             print("\nPARETI: (nessuna)")
+
+        if self.cordoli:
+            print("\nCORDOLI:")
+            for c in self.cordoli:
+                tipo = "perimetrale" if c['x1'] is None else "lineare"
+                print(f"  - {c['nome']}: piano {c['piano']}, {c['base']}x{c['altezza']}m ({tipo})")
+        else:
+            print("\nCORDOLI: (nessuno)")
 
         if self.analisi:
             print("\nANALISI:")
@@ -662,6 +677,132 @@ ESEMPIO:
             print("\nMasse di piano: NON DEFINITE")
 
         print()
+
+    # ========================================================================
+    # CORDOLI (RING BEAMS)
+    # ========================================================================
+
+    def cordolo(self, nome: str, piano: int, base: float = 0.30,
+                altezza: float = 0.25, materiale: str = "calcestruzzo") -> Dict:
+        """
+        Aggiunge un cordolo perimetrale a un piano.
+
+        I cordoli sono elementi orizzontali che collegano le pareti
+        alla sommità di ogni piano, prevenendo i meccanismi di ribaltamento.
+
+        Args:
+            nome: Nome identificativo del cordolo
+            piano: Indice del piano (0 = primo piano)
+            base: Larghezza sezione [m] (default 0.30)
+            altezza: Altezza sezione [m] (default 0.25)
+            materiale: Tipo materiale (calcestruzzo, acciaio)
+
+        Returns:
+            Dict con dati cordolo
+        """
+        cordolo_data = {
+            'nome': nome,
+            'piano': piano,
+            'base': base,
+            'altezza': altezza,
+            'materiale': materiale,
+            'x1': None,  # None = perimetrale
+            'y1': None,
+            'x2': None,
+            'y2': None
+        }
+
+        self.cordoli.append(cordolo_data)
+        area = base * altezza
+        inerzia = base * altezza**3 / 12
+        print(f"Cordolo '{nome}' piano {piano}: {base}x{altezza}m, A={area:.4f}m², I={inerzia:.6f}m⁴")
+        return cordolo_data
+
+    def cordolo_linea(self, nome: str, piano: int, x1: float, y1: float,
+                      x2: float, y2: float, base: float = 0.30,
+                      altezza: float = 0.25, materiale: str = "calcestruzzo") -> Dict:
+        """
+        Aggiunge un cordolo con coordinate specifiche.
+
+        Args:
+            nome: Nome identificativo
+            piano: Indice del piano
+            x1, y1: Coordinate punto iniziale [m]
+            x2, y2: Coordinate punto finale [m]
+            base: Larghezza sezione [m]
+            altezza: Altezza sezione [m]
+            materiale: Tipo materiale
+
+        Returns:
+            Dict con dati cordolo
+        """
+        import math
+        lunghezza = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
+        cordolo_data = {
+            'nome': nome,
+            'piano': piano,
+            'base': base,
+            'altezza': altezza,
+            'materiale': materiale,
+            'x1': x1,
+            'y1': y1,
+            'x2': x2,
+            'y2': y2,
+            'lunghezza': lunghezza
+        }
+
+        self.cordoli.append(cordolo_data)
+        area = base * altezza
+        print(f"Cordolo '{nome}' piano {piano}: ({x1},{y1})->({x2},{y2}), L={lunghezza:.2f}m, A={area:.4f}m²")
+        return cordolo_data
+
+    def lista_cordoli(self):
+        """Mostra tutti i cordoli definiti"""
+        if not self.cordoli:
+            print("Nessun cordolo definito")
+            return
+
+        print("\n=== CORDOLI ===\n")
+        print(f"{'Nome':>10} {'Piano':>6} {'Sezione':>12} {'Materiale':>12} {'Tipo':>12}")
+        print("-" * 55)
+
+        for c in self.cordoli:
+            sezione = f"{c['base']:.2f}x{c['altezza']:.2f}"
+            tipo = "Perimetrale" if c['x1'] is None else f"L={c.get('lunghezza', 0):.2f}m"
+            print(f"{c['nome']:>10} {c['piano']:>6} {sezione:>12} {c['materiale']:>12} {tipo:>12}")
+
+        print()
+
+    def rimuovi_cordolo(self, nome: str) -> bool:
+        """
+        Rimuove un cordolo per nome.
+
+        Args:
+            nome: Nome del cordolo da rimuovere
+
+        Returns:
+            True se rimosso, False se non trovato
+        """
+        for i, c in enumerate(self.cordoli):
+            if c['nome'] == nome:
+                del self.cordoli[i]
+                print(f"Cordolo '{nome}' rimosso")
+                return True
+        print(f"Cordolo '{nome}' non trovato")
+        return False
+
+    def cordoli_piano(self, piano: int) -> List[Dict]:
+        """
+        Restituisce tutti i cordoli di un piano specifico.
+
+        Args:
+            piano: Indice del piano
+
+        Returns:
+            Lista dei cordoli del piano
+        """
+        return [c for c in self.cordoli if c['piano'] == piano]
 
     # ========================================================================
     # ANALISI
@@ -1229,10 +1370,36 @@ ESEMPIO:
             print(f"  Muri caricati: {len(project.muri)}")
             print(f"  Piani definiti: {len(project.piani)}")
 
+        # Processa CORDOLI
+        if project.cordoli:
+            for cordolo in project.cordoli:
+                if cordolo.is_perimetrale:
+                    self.cordolo(
+                        nome=cordolo.nome,
+                        piano=cordolo.piano,
+                        base=cordolo.base,
+                        altezza=cordolo.altezza,
+                        materiale=cordolo.materiale
+                    )
+                else:
+                    self.cordolo_linea(
+                        nome=cordolo.nome,
+                        piano=cordolo.piano,
+                        x1=cordolo.x1,
+                        y1=cordolo.y1,
+                        x2=cordolo.x2,
+                        y2=cordolo.y2,
+                        base=cordolo.base,
+                        altezza=cordolo.altezza,
+                        materiale=cordolo.materiale
+                    )
+            print(f"  Cordoli caricati: {len(project.cordoli)}")
+
         # Riepilogo
         print(f"\nProgetto '{project.nome}' caricato da DSL:")
         print(f"  Materiali: {len(self.materiali)}")
         print(f"  Pareti: {len(self.pareti)}")
+        print(f"  Cordoli: {len(self.cordoli)}")
         print(f"  Geometrie: {len(self.geometrie)}")
         print(f"  Analisi configurate: {len(self.analisi)}")
 
@@ -1245,6 +1412,7 @@ ESEMPIO:
             'nome': project.nome,
             'materiali': len(self.materiali),
             'pareti': len(self.pareti),
+            'cordoli': len(self.cordoli),
             'geometrie': len(self.geometrie),
             'analisi': len(self.analisi)
         }
