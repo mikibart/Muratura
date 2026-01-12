@@ -53,7 +53,9 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QInputDialog, QDialog,
     QFormLayout, QLineEdit, QDoubleSpinBox, QSpinBox,
     QComboBox, QDialogButtonBox, QLabel, QGroupBox,
-    QHeaderView, QPushButton, QFrame
+    QHeaderView, QPushButton, QFrame, QStackedWidget,
+    QWizard, QWizardPage, QCompleter, QListWidget, QTextEdit,
+    QGridLayout, QRadioButton, QButtonGroup, QScrollArea
 )
 from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QSize
 from PyQt5.QtGui import (
@@ -61,10 +63,34 @@ from PyQt5.QtGui import (
     QMouseEvent, QPainterPath, QKeyEvent, QIcon, QPixmap, QImage
 )
 
+# Import modulo sismico
+try:
+    from Material.seismic import (
+        SeismicAnalysis, SoilCategory, TopographicCategory,
+        UseClass, LimitState, COMUNI_DATABASE, search_comuni,
+        get_all_regions, get_comuni_by_region
+    )
+    SEISMIC_AVAILABLE = True
+except ImportError:
+    SEISMIC_AVAILABLE = False
+    print("Avviso: modulo seismic.py non disponibile")
+
 
 # ============================================================================
 # STRUTTURE DATI
 # ============================================================================
+
+@dataclass
+class ParametriSismici:
+    """Parametri sismici del progetto"""
+    comune: str = ""
+    provincia: str = ""
+    regione: str = ""
+    sottosuolo: str = "B"  # A, B, C, D, E
+    topografia: str = "T1"  # T1, T2, T3, T4
+    vita_nominale: float = 50.0  # anni
+    classe_uso: int = 2  # I, II, III, IV
+    fattore_struttura: float = 1.5  # q per muratura
 
 @dataclass
 class Muro:
@@ -173,6 +199,7 @@ class Progetto:
     """Contiene tutti i dati del progetto"""
     nome: str = "Nuovo Progetto"
     autore: str = ""
+    data: str = ""
     muri: List[Muro] = field(default_factory=list)
     aperture: List[Apertura] = field(default_factory=list)
     materiali: List[Materiale] = field(default_factory=list)
@@ -180,6 +207,11 @@ class Progetto:
     carichi: List[Carico] = field(default_factory=list)
     cordoli: List[Cordolo] = field(default_factory=list)
     filepath: str = ""
+    # Parametri sismici
+    sismici: ParametriSismici = field(default_factory=ParametriSismici)
+    # Parametri edificio
+    n_piani: int = 1
+    altezza_piano: float = 3.0
 
 
 # ============================================================================
@@ -820,8 +852,309 @@ class PiantaCanvas(QWidget):
 # DIALOGS
 # ============================================================================
 
+class WizardNuovoProgetto(QWizard):
+    """Wizard per creare un nuovo progetto con tutti i parametri"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Nuovo Progetto - Wizard")
+        self.setWizardStyle(QWizard.ModernStyle)
+        self.setMinimumSize(700, 500)
+
+        # Aggiungi pagine
+        self.addPage(self.creaPaginaDatiGenerali())
+        self.addPage(self.creaPaginaLocalizzazione())
+        self.addPage(self.creaPaginaParametriEdificio())
+        self.addPage(self.creaPaginaRiepilogo())
+
+    def creaPaginaDatiGenerali(self) -> QWizardPage:
+        """Pagina 1: Dati generali del progetto"""
+        page = QWizardPage()
+        page.setTitle("Dati Generali")
+        page.setSubTitle("Inserisci le informazioni base del progetto")
+
+        layout = QFormLayout(page)
+
+        self.nome_edit = QLineEdit("Nuovo Edificio")
+        self.nome_edit.setPlaceholderText("Nome del progetto")
+        layout.addRow("Nome progetto:", self.nome_edit)
+
+        self.autore_edit = QLineEdit()
+        self.autore_edit.setPlaceholderText("Ing. Mario Rossi")
+        layout.addRow("Progettista:", self.autore_edit)
+
+        from datetime import datetime
+        self.data_edit = QLineEdit(datetime.now().strftime("%Y-%m-%d"))
+        layout.addRow("Data:", self.data_edit)
+
+        # Tipo di intervento
+        self.tipo_intervento = QComboBox()
+        self.tipo_intervento.addItems([
+            "Verifica edificio esistente",
+            "Nuovo edificio",
+            "Miglioramento sismico",
+            "Adeguamento sismico"
+        ])
+        layout.addRow("Tipo intervento:", self.tipo_intervento)
+
+        # Registra campi obbligatori
+        page.registerField("nome*", self.nome_edit)
+
+        return page
+
+    def creaPaginaLocalizzazione(self) -> QWizardPage:
+        """Pagina 2: Localizzazione sismica"""
+        page = QWizardPage()
+        page.setTitle("Localizzazione Sismica")
+        page.setSubTitle("Definisci la posizione geografica e i parametri del sito")
+
+        layout = QVBoxLayout(page)
+
+        # Gruppo localita'
+        grp_loc = QGroupBox("Localita'")
+        loc_layout = QFormLayout(grp_loc)
+
+        # Comune con autocompletamento
+        self.comune_edit = QLineEdit()
+        self.comune_edit.setPlaceholderText("Inizia a digitare il nome del comune...")
+        if SEISMIC_AVAILABLE:
+            completer = QCompleter(list(COMUNI_DATABASE.keys()))
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchContains)
+            self.comune_edit.setCompleter(completer)
+            self.comune_edit.textChanged.connect(self.onComuneChanged)
+        loc_layout.addRow("Comune:", self.comune_edit)
+
+        self.provincia_label = QLabel("-")
+        loc_layout.addRow("Provincia:", self.provincia_label)
+
+        self.regione_label = QLabel("-")
+        loc_layout.addRow("Regione:", self.regione_label)
+
+        # Info sismiche (mostrate dopo selezione comune)
+        self.ag_label = QLabel("-")
+        loc_layout.addRow("ag (SLV):", self.ag_label)
+
+        self.zona_label = QLabel("-")
+        loc_layout.addRow("Zona sismica:", self.zona_label)
+
+        layout.addWidget(grp_loc)
+
+        # Gruppo parametri sito
+        grp_sito = QGroupBox("Parametri del Sito")
+        sito_layout = QFormLayout(grp_sito)
+
+        self.sottosuolo_combo = QComboBox()
+        self.sottosuolo_combo.addItems(["A", "B", "C", "D", "E"])
+        self.sottosuolo_combo.setCurrentText("B")
+        sottosuolo_desc = QLabel("B = Depositi di sabbie/ghiaie molto addensate (360 < Vs30 <= 800 m/s)")
+        sottosuolo_desc.setStyleSheet("color: gray; font-size: 10px;")
+        sito_layout.addRow("Categoria sottosuolo:", self.sottosuolo_combo)
+        sito_layout.addRow("", sottosuolo_desc)
+
+        self.topografia_combo = QComboBox()
+        self.topografia_combo.addItems(["T1", "T2", "T3", "T4"])
+        self.topografia_combo.setCurrentText("T1")
+        topo_desc = QLabel("T1 = Superficie pianeggiante, pendii < 15 gradi")
+        topo_desc.setStyleSheet("color: gray; font-size: 10px;")
+        sito_layout.addRow("Categoria topografica:", self.topografia_combo)
+        sito_layout.addRow("", topo_desc)
+
+        layout.addWidget(grp_sito)
+
+        # Registra campo comune come obbligatorio
+        page.registerField("comune*", self.comune_edit)
+
+        return page
+
+    def onComuneChanged(self, text):
+        """Aggiorna info quando si seleziona un comune"""
+        if not SEISMIC_AVAILABLE:
+            return
+
+        comune_upper = text.upper().strip()
+        if comune_upper in COMUNI_DATABASE:
+            data = COMUNI_DATABASE[comune_upper]
+            self.provincia_label.setText(data.get('provincia', '-'))
+            self.regione_label.setText(data.get('regione', '-'))
+
+            # Calcola ag
+            try:
+                analysis = SeismicAnalysis(comune=comune_upper)
+                self.ag_label.setText(f"{analysis.ag_SLV:.3f} g")
+                self.zona_label.setText(str(analysis.seismic_zone))
+            except:
+                self.ag_label.setText("-")
+                self.zona_label.setText("-")
+        else:
+            self.provincia_label.setText("-")
+            self.regione_label.setText("-")
+            self.ag_label.setText("-")
+            self.zona_label.setText("-")
+
+    def creaPaginaParametriEdificio(self) -> QWizardPage:
+        """Pagina 3: Parametri dell'edificio"""
+        page = QWizardPage()
+        page.setTitle("Parametri Edificio")
+        page.setSubTitle("Definisci le caratteristiche strutturali dell'edificio")
+
+        layout = QVBoxLayout(page)
+
+        # Gruppo vita nominale e classe uso
+        grp_vn = QGroupBox("Vita Nominale e Classe d'Uso (NTC 2018 Tab. 2.4.I/II)")
+        vn_layout = QFormLayout(grp_vn)
+
+        self.vn_spin = QDoubleSpinBox()
+        self.vn_spin.setRange(10, 100)
+        self.vn_spin.setValue(50)
+        self.vn_spin.setSuffix(" anni")
+        self.vn_spin.valueChanged.connect(self.aggiornaVR)
+        vn_layout.addRow("Vita nominale VN:", self.vn_spin)
+
+        self.classe_uso_combo = QComboBox()
+        self.classe_uso_combo.addItems([
+            "I - Presenza occasionale (Cu=0.7)",
+            "II - Affollamento normale (Cu=1.0)",
+            "III - Affollamento significativo (Cu=1.5)",
+            "IV - Funzioni strategiche (Cu=2.0)"
+        ])
+        self.classe_uso_combo.setCurrentIndex(1)
+        self.classe_uso_combo.currentIndexChanged.connect(self.aggiornaVR)
+        vn_layout.addRow("Classe d'uso:", self.classe_uso_combo)
+
+        self.vr_label = QLabel("VR = 50 anni")
+        self.vr_label.setStyleSheet("font-weight: bold;")
+        vn_layout.addRow("Periodo di riferimento:", self.vr_label)
+
+        layout.addWidget(grp_vn)
+
+        # Gruppo geometria edificio
+        grp_geom = QGroupBox("Geometria Edificio")
+        geom_layout = QFormLayout(grp_geom)
+
+        self.n_piani_spin = QSpinBox()
+        self.n_piani_spin.setRange(1, 10)
+        self.n_piani_spin.setValue(2)
+        geom_layout.addRow("Numero piani:", self.n_piani_spin)
+
+        self.h_piano_spin = QDoubleSpinBox()
+        self.h_piano_spin.setRange(2.0, 6.0)
+        self.h_piano_spin.setValue(3.0)
+        self.h_piano_spin.setSuffix(" m")
+        self.h_piano_spin.setSingleStep(0.1)
+        geom_layout.addRow("Altezza interpiano:", self.h_piano_spin)
+
+        layout.addWidget(grp_geom)
+
+        # Gruppo fattore di struttura
+        grp_q = QGroupBox("Fattore di Struttura (NTC 2018 Tab. 7.8.I)")
+        q_layout = QFormLayout(grp_q)
+
+        self.q_spin = QDoubleSpinBox()
+        self.q_spin.setRange(1.0, 3.0)
+        self.q_spin.setValue(1.5)
+        self.q_spin.setSingleStep(0.1)
+        q_desc = QLabel("1.5 = Muratura ordinaria non armata\n2.0 = Muratura armata")
+        q_desc.setStyleSheet("color: gray; font-size: 10px;")
+        q_layout.addRow("Fattore q:", self.q_spin)
+        q_layout.addRow("", q_desc)
+
+        layout.addWidget(grp_q)
+
+        return page
+
+    def aggiornaVR(self):
+        """Aggiorna il periodo di riferimento VR"""
+        VN = self.vn_spin.value()
+        Cu_map = {0: 0.7, 1: 1.0, 2: 1.5, 3: 2.0}
+        Cu = Cu_map.get(self.classe_uso_combo.currentIndex(), 1.0)
+        VR = VN * Cu
+        self.vr_label.setText(f"VR = {VR:.0f} anni")
+
+    def creaPaginaRiepilogo(self) -> QWizardPage:
+        """Pagina 4: Riepilogo"""
+        page = QWizardPage()
+        page.setTitle("Riepilogo")
+        page.setSubTitle("Verifica i dati inseriti prima di creare il progetto")
+
+        layout = QVBoxLayout(page)
+
+        self.riepilogo_text = QTextEdit()
+        self.riepilogo_text.setReadOnly(True)
+        layout.addWidget(self.riepilogo_text)
+
+        # Aggiorna riepilogo quando si entra nella pagina
+        page.initializePage = self.aggiornaRiepilogo
+
+        return page
+
+    def aggiornaRiepilogo(self):
+        """Genera il testo del riepilogo"""
+        lines = [
+            "=" * 50,
+            "RIEPILOGO PROGETTO",
+            "=" * 50,
+            "",
+            f"Nome: {self.nome_edit.text()}",
+            f"Progettista: {self.autore_edit.text()}",
+            f"Data: {self.data_edit.text()}",
+            f"Tipo intervento: {self.tipo_intervento.currentText()}",
+            "",
+            "LOCALIZZAZIONE:",
+            f"  Comune: {self.comune_edit.text().upper()}",
+            f"  Provincia: {self.provincia_label.text()}",
+            f"  Regione: {self.regione_label.text()}",
+            f"  ag (SLV): {self.ag_label.text()}",
+            f"  Zona sismica: {self.zona_label.text()}",
+            "",
+            "PARAMETRI SITO:",
+            f"  Categoria sottosuolo: {self.sottosuolo_combo.currentText()}",
+            f"  Categoria topografica: {self.topografia_combo.currentText()}",
+            "",
+            "PARAMETRI EDIFICIO:",
+            f"  Vita nominale: {self.vn_spin.value():.0f} anni",
+            f"  Classe d'uso: {self.classe_uso_combo.currentText().split(' - ')[0]}",
+            f"  {self.vr_label.text()}",
+            f"  Numero piani: {self.n_piani_spin.value()}",
+            f"  Altezza interpiano: {self.h_piano_spin.value():.2f} m",
+            f"  Fattore di struttura q: {self.q_spin.value():.2f}",
+            "",
+            "=" * 50,
+        ]
+        self.riepilogo_text.setText("\n".join(lines))
+
+    def getProgetto(self) -> Progetto:
+        """Restituisce il progetto configurato"""
+        p = Progetto()
+        p.nome = self.nome_edit.text()
+        p.autore = self.autore_edit.text()
+        p.data = self.data_edit.text()
+        p.n_piani = self.n_piani_spin.value()
+        p.altezza_piano = self.h_piano_spin.value()
+
+        # Parametri sismici
+        p.sismici.comune = self.comune_edit.text().upper()
+        p.sismici.provincia = self.provincia_label.text()
+        p.sismici.regione = self.regione_label.text()
+        p.sismici.sottosuolo = self.sottosuolo_combo.currentText()
+        p.sismici.topografia = self.topografia_combo.currentText()
+        p.sismici.vita_nominale = self.vn_spin.value()
+        p.sismici.classe_uso = self.classe_uso_combo.currentIndex() + 1
+        p.sismici.fattore_struttura = self.q_spin.value()
+
+        # Crea piani di default
+        for i in range(p.n_piani):
+            p.piani.append(Piano(
+                numero=i,
+                quota=i * p.altezza_piano,
+                altezza=p.altezza_piano
+            ))
+
+        return p
+
+
 class DialogoNuovoProgetto(QDialog):
-    """Dialogo per creare un nuovo progetto"""
+    """Dialogo semplice per creare un nuovo progetto (legacy)"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1970,18 +2303,41 @@ class MuraturaEditor(QMainWindow):
         self.statusBar().showMessage(f"Muro '{muro.nome}' aggiunto - L={muro.lunghezza:.2f}m")
 
     def nuovoProgetto(self):
-        dialogo = DialogoNuovoProgetto(self)
-        if dialogo.exec_() == QDialog.Accepted:
-            nome, autore = dialogo.getValues()
-            self.progetto = Progetto(nome=nome, autore=autore)
+        """Crea un nuovo progetto usando il wizard"""
+        wizard = WizardNuovoProgetto(self)
+        if wizard.exec_() == QWizard.Accepted:
+            # Ottieni progetto configurato dal wizard
+            self.progetto = wizard.getProgetto()
+
+            # Aggiungi materiale di default
             self.progetto.materiali.append(Materiale(
                 nome="mattoni", tipo="MATTONI_PIENI",
                 malta="BUONA", conservazione="BUONO"
             ))
+
+            # Aggiorna GUI
             self.canvas.setProgetto(self.progetto)
             self.pannello.setProgetto(self.progetto)
             self.aggiornaPianoCombo()
-            self.setWindowTitle(f"Muratura Editor - {nome}")
+            self.setWindowTitle(f"Muratura Editor - {self.progetto.nome}")
+
+            # Mostra info sismiche nella status bar
+            if self.progetto.sismici.comune:
+                self.statusBar().showMessage(
+                    f"Progetto creato: {self.progetto.nome} - "
+                    f"Comune: {self.progetto.sismici.comune} - "
+                    f"Zona sismica: {self.zona_sismica()}"
+                )
+
+    def zona_sismica(self) -> str:
+        """Calcola la zona sismica del progetto"""
+        if not SEISMIC_AVAILABLE or not self.progetto.sismici.comune:
+            return "-"
+        try:
+            analysis = SeismicAnalysis(comune=self.progetto.sismici.comune)
+            return str(analysis.seismic_zone)
+        except:
+            return "-"
 
     def apriProgetto(self):
         filepath, _ = QFileDialog.getOpenFileName(
