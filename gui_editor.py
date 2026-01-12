@@ -257,6 +257,10 @@ class PiantaCanvas(QWidget):
         self.osnap_raggio = 0.5  # raggio di ricerca in metri
         self.osnap_attivo: Optional[OsnapPoint] = None
 
+        # Griglia configurabile
+        self.passo_griglia = 0.5  # metri (default 50cm)
+        self.mostra_quote = True  # mostra lunghezze sui muri
+
         # Planimetria di sfondo
         self.planimetria_img: Optional[QPixmap] = None
         self.planimetria_piano: Optional[Piano] = None
@@ -322,11 +326,18 @@ class PiantaCanvas(QWidget):
         y = (self.offset_y - sy) / self.scala
         return QPointF(x, y)
 
-    def snapToGrid(self, p: QPointF, grid_size: float = 0.5) -> QPointF:
+    def snapToGrid(self, p: QPointF, grid_size: float = None) -> QPointF:
         """Snap al punto griglia piu' vicino"""
+        if grid_size is None:
+            grid_size = self.passo_griglia
         x = round(p.x() / grid_size) * grid_size
         y = round(p.y() / grid_size) * grid_size
         return QPointF(x, y)
+
+    def setPassoGriglia(self, passo: float):
+        """Imposta il passo della griglia in metri"""
+        self.passo_griglia = max(0.05, min(2.0, passo))  # Limita tra 5cm e 2m
+        self.update()
 
     def findOsnap(self, pos: QPointF) -> Optional[OsnapPoint]:
         """Trova il punto di snap piu' vicino"""
@@ -510,20 +521,56 @@ class PiantaCanvas(QWidget):
         painter.setOpacity(1.0)
 
     def disegnaGriglia(self, painter: QPainter):
-        """Disegna la griglia di sfondo"""
-        pen = QPen(QColor(220, 220, 220), 1)
-        painter.setPen(pen)
+        """Disegna la griglia di sfondo con passo configurabile"""
+        # Griglia secondaria (passo configurabile)
+        pen_sec = QPen(QColor(235, 235, 235), 1)
+        painter.setPen(pen_sec)
 
-        # Griglia ogni metro
-        for x in range(-10, 30):
-            p1 = self.worldToScreen(x, -10)
-            p2 = self.worldToScreen(x, 30)
+        passo = self.passo_griglia
+        x_min, x_max = -10, 30
+        y_min, y_max = -10, 30
+
+        x = x_min
+        while x <= x_max:
+            p1 = self.worldToScreen(x, y_min)
+            p2 = self.worldToScreen(x, y_max)
+            painter.drawLine(p1, p2)
+            x += passo
+
+        y = y_min
+        while y <= y_max:
+            p1 = self.worldToScreen(x_min, y)
+            p2 = self.worldToScreen(x_max, y)
+            painter.drawLine(p1, p2)
+            y += passo
+
+        # Griglia principale (ogni metro)
+        pen_main = QPen(QColor(200, 200, 200), 1)
+        painter.setPen(pen_main)
+
+        for x in range(x_min, x_max + 1):
+            p1 = self.worldToScreen(x, y_min)
+            p2 = self.worldToScreen(x, y_max)
             painter.drawLine(p1, p2)
 
-        for y in range(-10, 30):
-            p1 = self.worldToScreen(-10, y)
-            p2 = self.worldToScreen(30, y)
+        for y in range(y_min, y_max + 1):
+            p1 = self.worldToScreen(x_min, y)
+            p2 = self.worldToScreen(x_max, y)
             painter.drawLine(p1, p2)
+
+        # Quote sulla griglia principale (ogni 5 metri)
+        painter.setPen(QPen(QColor(100, 100, 100), 1))
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+
+        for x in range(0, x_max + 1, 5):
+            p = self.worldToScreen(x, -0.3)
+            painter.drawText(int(p.x() - 10), int(p.y()), f"{x}m")
+
+        for y in range(0, y_max + 1, 5):
+            p = self.worldToScreen(-0.5, y)
+            painter.drawText(int(p.x() - 20), int(p.y() + 5), f"{y}m")
 
     def disegnaAssi(self, painter: QPainter):
         """Disegna gli assi X e Y"""
@@ -1987,6 +2034,25 @@ class MuraturaEditor(QMainWindow):
         griglia_action.triggered.connect(self.toggleGriglia)
         vista_menu.addAction(griglia_action)
 
+        # Submenu passo griglia
+        griglia_menu = vista_menu.addMenu("Passo griglia")
+        self.griglia_actions = QActionGroup(self)
+        for passo, label in [(0.10, "10 cm"), (0.25, "25 cm"), (0.50, "50 cm (default)"),
+                             (1.0, "1 m"), (2.0, "2 m")]:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(passo == 0.5)
+            action.triggered.connect(lambda checked, p=passo: self.setPassoGriglia(p))
+            self.griglia_actions.addAction(action)
+            griglia_menu.addAction(action)
+
+        # Mostra quote
+        quote_action = QAction("Mostra quote sui muri", self)
+        quote_action.setCheckable(True)
+        quote_action.setChecked(True)
+        quote_action.triggered.connect(self.toggleQuote)
+        vista_menu.addAction(quote_action)
+
         zoom_fit_action = QAction("Adatta alla vista", self)
         zoom_fit_action.setShortcut("Ctrl+0")
         zoom_fit_action.triggered.connect(self.zoomFit)
@@ -2598,6 +2664,16 @@ class MuraturaEditor(QMainWindow):
 
     def toggleGriglia(self, checked):
         self.canvas.griglia = checked
+        self.canvas.update()
+
+    def setPassoGriglia(self, passo: float):
+        """Imposta il passo della griglia"""
+        self.canvas.setPassoGriglia(passo)
+        self.statusBar().showMessage(f"Passo griglia: {passo*100:.0f} cm")
+
+    def toggleQuote(self, checked):
+        """Mostra/nascondi quote sui muri"""
+        self.canvas.mostra_quote = checked
         self.canvas.update()
 
     def caricaPlanimetria(self):
