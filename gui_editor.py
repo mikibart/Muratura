@@ -2692,6 +2692,422 @@ class PannelloProprietà(QWidget):
 
 
 # ============================================================================
+# VISTA 3D
+# ============================================================================
+
+class Vista3DWidget(QWidget):
+    """Widget per visualizzazione 3D isometrica dell'edificio"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.progetto: Optional[Progetto] = None
+        self.setMinimumSize(400, 400)
+        self.setStyleSheet("background-color: white;")
+
+        # Parametri vista
+        self.angolo = 30  # Angolo rotazione orizzontale (gradi)
+        self.inclinazione = 30  # Angolo inclinazione verticale
+        self.scala = 30  # Pixel per metro
+        self.offset_x = 0
+        self.offset_y = 0
+
+        # Interazione mouse
+        self.dragging = False
+        self.last_pos = None
+
+        # Colori
+        self.colore_muro = QColor(200, 150, 100)  # Mattoni
+        self.colore_muro_ombra = QColor(160, 120, 80)
+        self.colore_apertura = QColor(100, 150, 200, 150)  # Vetro
+        self.colore_solaio = QColor(180, 180, 180, 200)
+
+    def setProgetto(self, progetto: Progetto):
+        self.progetto = progetto
+        self.update()
+
+    def proietta(self, x: float, y: float, z: float) -> Tuple[float, float]:
+        """Proietta coordinate 3D in 2D isometrico"""
+        # Rotazione attorno all'asse Z
+        rad = math.radians(self.angolo)
+        x_rot = x * math.cos(rad) - y * math.sin(rad)
+        y_rot = x * math.sin(rad) + y * math.cos(rad)
+
+        # Proiezione isometrica
+        rad_inc = math.radians(self.inclinazione)
+        px = x_rot * self.scala
+        py = (-y_rot * math.cos(rad_inc) - z) * self.scala
+
+        # Centro del widget + offset
+        cx = self.width() / 2 + self.offset_x
+        cy = self.height() / 2 + self.offset_y
+
+        return (cx + px, cy + py)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Sfondo
+        painter.fillRect(self.rect(), QColor(245, 248, 250))
+
+        if not self.progetto:
+            painter.drawText(self.rect(), Qt.AlignCenter, "Nessun progetto caricato")
+            return
+
+        # Disegna griglia a terra
+        self.disegnaGriglia(painter)
+
+        # Disegna solai (prima, come base)
+        for solaio in self.progetto.solai:
+            self.disegnaSolaio(painter, solaio)
+
+        # Disegna muri (ordinati per distanza dalla camera)
+        muri_ordinati = self.ordinaMuriPerProfondita()
+        for muro in muri_ordinati:
+            self.disegnaMuro3D(painter, muro)
+
+        # Info
+        painter.setPen(QPen(QColor(100, 100, 100)))
+        font = QFont("Arial", 9)
+        painter.setFont(font)
+        painter.drawText(10, 20, f"Rotazione: {self.angolo}° | Scala: {self.scala} px/m")
+        painter.drawText(10, 35, "Trascinare per ruotare, rotella per zoom")
+
+    def disegnaGriglia(self, painter):
+        """Disegna griglia di riferimento sul piano XY"""
+        painter.setPen(QPen(QColor(200, 200, 200), 0.5))
+
+        # Griglia 20x20 m
+        for i in range(-10, 11, 2):
+            # Linee X
+            p1 = self.proietta(i, -10, 0)
+            p2 = self.proietta(i, 10, 0)
+            painter.drawLine(int(p1[0]), int(p1[1]), int(p2[0]), int(p2[1]))
+
+            # Linee Y
+            p1 = self.proietta(-10, i, 0)
+            p2 = self.proietta(10, i, 0)
+            painter.drawLine(int(p1[0]), int(p1[1]), int(p2[0]), int(p2[1]))
+
+        # Assi
+        painter.setPen(QPen(QColor(255, 0, 0), 2))  # X rosso
+        p0 = self.proietta(0, 0, 0)
+        px = self.proietta(3, 0, 0)
+        painter.drawLine(int(p0[0]), int(p0[1]), int(px[0]), int(px[1]))
+        painter.drawText(int(px[0]) + 5, int(px[1]), "X")
+
+        painter.setPen(QPen(QColor(0, 200, 0), 2))  # Y verde
+        py = self.proietta(0, 3, 0)
+        painter.drawLine(int(p0[0]), int(p0[1]), int(py[0]), int(py[1]))
+        painter.drawText(int(py[0]) + 5, int(py[1]), "Y")
+
+        painter.setPen(QPen(QColor(0, 0, 255), 2))  # Z blu
+        pz = self.proietta(0, 0, 3)
+        painter.drawLine(int(p0[0]), int(p0[1]), int(pz[0]), int(pz[1]))
+        painter.drawText(int(pz[0]) + 5, int(pz[1]), "Z")
+
+    def ordinaMuriPerProfondita(self) -> List[Muro]:
+        """Ordina i muri dal piu' lontano al piu' vicino"""
+        if not self.progetto:
+            return []
+
+        rad = math.radians(self.angolo)
+
+        def distanza_camera(muro):
+            cx = (muro.x1 + muro.x2) / 2
+            cy = (muro.y1 + muro.y2) / 2
+            # Distanza lungo la direzione di vista
+            return -(cx * math.sin(rad) + cy * math.cos(rad))
+
+        return sorted(self.progetto.muri, key=distanza_camera)
+
+    def disegnaMuro3D(self, painter, muro: Muro):
+        """Disegna un muro come parallelepipedo 3D"""
+        # Calcola i vertici del muro
+        dx = muro.x2 - muro.x1
+        dy = muro.y2 - muro.y1
+        lunghezza = math.sqrt(dx*dx + dy*dy)
+        if lunghezza < 0.01:
+            return
+
+        # Direzione normale (perpendicolare al muro)
+        nx = -dy / lunghezza * muro.spessore / 2
+        ny = dx / lunghezza * muro.spessore / 2
+
+        # 8 vertici del parallelepipedo
+        z_base = muro.z
+        z_top = muro.z + muro.altezza
+
+        # Base (4 vertici)
+        v = [
+            (muro.x1 - nx, muro.y1 - ny, z_base),
+            (muro.x1 + nx, muro.y1 + ny, z_base),
+            (muro.x2 + nx, muro.y2 + ny, z_base),
+            (muro.x2 - nx, muro.y2 - ny, z_base),
+            # Top (4 vertici)
+            (muro.x1 - nx, muro.y1 - ny, z_top),
+            (muro.x1 + nx, muro.y1 + ny, z_top),
+            (muro.x2 + nx, muro.y2 + ny, z_top),
+            (muro.x2 - nx, muro.y2 - ny, z_top),
+        ]
+
+        # Proietta tutti i vertici
+        pv = [self.proietta(*vert) for vert in v]
+
+        # Colore in base a DCR se attivo
+        if muro.dcr > 0:
+            if muro.dcr <= 0.5:
+                colore = QColor(0, 180, 0)
+            elif muro.dcr <= 0.8:
+                colore = QColor(100, 200, 0)
+            elif muro.dcr <= 1.0:
+                colore = QColor(255, 200, 0)
+            elif muro.dcr <= 1.2:
+                colore = QColor(255, 140, 0)
+            else:
+                colore = QColor(255, 0, 0)
+            colore_ombra = colore.darker(120)
+        else:
+            colore = self.colore_muro
+            colore_ombra = self.colore_muro_ombra
+
+        # Disegna le facce visibili
+        # Faccia superiore (top)
+        path_top = QPainterPath()
+        path_top.moveTo(pv[4][0], pv[4][1])
+        path_top.lineTo(pv[5][0], pv[5][1])
+        path_top.lineTo(pv[6][0], pv[6][1])
+        path_top.lineTo(pv[7][0], pv[7][1])
+        path_top.closeSubpath()
+        painter.setBrush(QBrush(colore.lighter(110)))
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.drawPath(path_top)
+
+        # Facce laterali (semplificato - disegna solo 2 facce visibili)
+        # Faccia frontale 1 (0-3-7-4)
+        path_f1 = QPainterPath()
+        path_f1.moveTo(pv[0][0], pv[0][1])
+        path_f1.lineTo(pv[3][0], pv[3][1])
+        path_f1.lineTo(pv[7][0], pv[7][1])
+        path_f1.lineTo(pv[4][0], pv[4][1])
+        path_f1.closeSubpath()
+        painter.setBrush(QBrush(colore))
+        painter.drawPath(path_f1)
+
+        # Faccia frontale 2 (1-2-6-5)
+        path_f2 = QPainterPath()
+        path_f2.moveTo(pv[1][0], pv[1][1])
+        path_f2.lineTo(pv[2][0], pv[2][1])
+        path_f2.lineTo(pv[6][0], pv[6][1])
+        path_f2.lineTo(pv[5][0], pv[5][1])
+        path_f2.closeSubpath()
+        painter.setBrush(QBrush(colore_ombra))
+        painter.drawPath(path_f2)
+
+        # Facce di estremita'
+        # Estremo 1 (0-1-5-4)
+        path_e1 = QPainterPath()
+        path_e1.moveTo(pv[0][0], pv[0][1])
+        path_e1.lineTo(pv[1][0], pv[1][1])
+        path_e1.lineTo(pv[5][0], pv[5][1])
+        path_e1.lineTo(pv[4][0], pv[4][1])
+        path_e1.closeSubpath()
+        painter.setBrush(QBrush(colore.darker(105)))
+        painter.drawPath(path_e1)
+
+        # Estremo 2 (2-3-7-6)
+        path_e2 = QPainterPath()
+        path_e2.moveTo(pv[2][0], pv[2][1])
+        path_e2.lineTo(pv[3][0], pv[3][1])
+        path_e2.lineTo(pv[7][0], pv[7][1])
+        path_e2.lineTo(pv[6][0], pv[6][1])
+        path_e2.closeSubpath()
+        painter.drawPath(path_e2)
+
+        # Disegna aperture (finestre/porte)
+        self.disegnaAperture3D(painter, muro, v)
+
+    def disegnaAperture3D(self, painter, muro: Muro, v):
+        """Disegna le aperture sul muro in 3D"""
+        if not self.progetto:
+            return
+
+        # Trova aperture su questo muro
+        aperture = [a for a in self.progetto.aperture if a.muro == muro.nome]
+
+        for ap in aperture:
+            # Calcola posizione apertura lungo il muro
+            dx = muro.x2 - muro.x1
+            dy = muro.y2 - muro.y1
+            lunghezza = math.sqrt(dx*dx + dy*dy)
+            if lunghezza < 0.01:
+                continue
+
+            # Posizione relativa (0-1) lungo il muro
+            t_start = ap.posizione / lunghezza
+            t_end = (ap.posizione + ap.larghezza) / lunghezza
+
+            # Vertici apertura
+            z_bot = muro.z + ap.altezza_davanzale
+            z_top = z_bot + ap.altezza
+
+            # Calcola punti sulla faccia del muro
+            nx = -dy / lunghezza * muro.spessore / 2
+            ny = dx / lunghezza * muro.spessore / 2
+
+            # Punti sulla faccia frontale
+            ax1 = muro.x1 + dx * t_start - nx
+            ay1 = muro.y1 + dy * t_start - ny
+            ax2 = muro.x1 + dx * t_end - nx
+            ay2 = muro.y1 + dy * t_end - ny
+
+            # Proietta
+            p1 = self.proietta(ax1, ay1, z_bot)
+            p2 = self.proietta(ax2, ay2, z_bot)
+            p3 = self.proietta(ax2, ay2, z_top)
+            p4 = self.proietta(ax1, ay1, z_top)
+
+            # Disegna apertura (colore diverso per finestre/porte)
+            if ap.tipo == "finestra":
+                painter.setBrush(QBrush(QColor(150, 200, 255, 180)))  # Vetro
+            else:
+                painter.setBrush(QBrush(QColor(100, 70, 50, 200)))  # Porta legno
+
+            painter.setPen(QPen(QColor(60, 60, 60), 1))
+            path = QPainterPath()
+            path.moveTo(p1[0], p1[1])
+            path.lineTo(p2[0], p2[1])
+            path.lineTo(p3[0], p3[1])
+            path.lineTo(p4[0], p4[1])
+            path.closeSubpath()
+            painter.drawPath(path)
+
+    def disegnaSolaio(self, painter, solaio: Solaio):
+        """Disegna un solaio come piano orizzontale"""
+        # Posiziona il solaio alla quota del piano
+        z = solaio.piano * self.progetto.altezza_piano
+
+        # Usa le dimensioni del solaio come area
+        x1, y1 = 0, 0
+        x2 = solaio.larghezza
+        y2 = solaio.luce
+
+        # Vertici del solaio
+        p1 = self.proietta(x1, y1, z)
+        p2 = self.proietta(x2, y1, z)
+        p3 = self.proietta(x2, y2, z)
+        p4 = self.proietta(x1, y2, z)
+
+        # Disegna
+        painter.setBrush(QBrush(self.colore_solaio))
+        painter.setPen(QPen(QColor(100, 100, 100), 1))
+
+        path = QPainterPath()
+        path.moveTo(p1[0], p1[1])
+        path.lineTo(p2[0], p2[1])
+        path.lineTo(p3[0], p3[1])
+        path.lineTo(p4[0], p4[1])
+        path.closeSubpath()
+        painter.drawPath(path)
+
+        # Etichetta
+        cx = (p1[0] + p3[0]) / 2
+        cy = (p1[1] + p3[1]) / 2
+        painter.setPen(QPen(QColor(50, 50, 50)))
+        font = QFont("Arial", 8)
+        painter.setFont(font)
+        painter.drawText(int(cx) - 20, int(cy), solaio.nome)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.dragging = True
+            self.last_pos = event.pos()
+
+    def mouseMoveEvent(self, event):
+        if self.dragging and self.last_pos:
+            dx = event.x() - self.last_pos.x()
+            dy = event.y() - self.last_pos.y()
+
+            # Rotazione con movimento orizzontale
+            self.angolo = (self.angolo + dx * 0.5) % 360
+
+            # Pan con movimento verticale (shift) o inclinazione
+            if event.modifiers() & Qt.ShiftModifier:
+                self.offset_x += dx
+                self.offset_y += dy
+            else:
+                self.inclinazione = max(10, min(60, self.inclinazione + dy * 0.2))
+
+            self.last_pos = event.pos()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        self.dragging = False
+        self.last_pos = None
+
+    def wheelEvent(self, event):
+        # Zoom con rotella
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.scala = min(100, self.scala * 1.1)
+        else:
+            self.scala = max(5, self.scala / 1.1)
+        self.update()
+
+
+class Dialogo3D(QDialog):
+    """Finestra per vista 3D dell'edificio"""
+
+    def __init__(self, progetto: Progetto, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Vista 3D - " + progetto.nome)
+        self.setGeometry(100, 100, 800, 600)
+
+        layout = QVBoxLayout(self)
+
+        # Toolbar
+        toolbar = QHBoxLayout()
+
+        reset_btn = QPushButton("Reset Vista")
+        reset_btn.clicked.connect(self.resetVista)
+        toolbar.addWidget(reset_btn)
+
+        toolbar.addWidget(QLabel("Rotazione:"))
+        self.angolo_spin = QSpinBox()
+        self.angolo_spin.setRange(0, 359)
+        self.angolo_spin.setValue(30)
+        self.angolo_spin.valueChanged.connect(self.onAngoloChanged)
+        toolbar.addWidget(self.angolo_spin)
+
+        toolbar.addStretch()
+
+        layout.addLayout(toolbar)
+
+        # Vista 3D
+        self.vista3d = Vista3DWidget()
+        self.vista3d.setProgetto(progetto)
+        layout.addWidget(self.vista3d)
+
+        # Info
+        info_label = QLabel("Mouse: Trascina per ruotare | Shift+Trascina per pan | Rotella per zoom")
+        info_label.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(info_label)
+
+    def resetVista(self):
+        self.vista3d.angolo = 30
+        self.vista3d.inclinazione = 30
+        self.vista3d.scala = 30
+        self.vista3d.offset_x = 0
+        self.vista3d.offset_y = 0
+        self.angolo_spin.setValue(30)
+        self.vista3d.update()
+
+    def onAngoloChanged(self, value):
+        self.vista3d.angolo = value
+        self.vista3d.update()
+
+
+# ============================================================================
 # FINESTRA PRINCIPALE
 # ============================================================================
 
@@ -2879,6 +3295,14 @@ class MuraturaEditor(QMainWindow):
         self.mostra_plan_action.setChecked(True)
         self.mostra_plan_action.triggered.connect(self.togglePlanimetria)
         vista_menu.addAction(self.mostra_plan_action)
+
+        # Vista 3D
+        vista_menu.addSeparator()
+
+        vista3d_action = QAction("Vista 3D...", self)
+        vista3d_action.setShortcut("F3")
+        vista3d_action.triggered.connect(self.mostraVista3D)
+        vista_menu.addAction(vista3d_action)
 
         # Progetto menu
         progetto_menu = menubar.addMenu("Progetto")
@@ -3965,6 +4389,16 @@ Per verifiche accurate usare SAM, POR o PUSHOVER.
         """Mostra/nasconde la planimetria di sfondo"""
         self.canvas.mostra_planimetria = checked
         self.canvas.update()
+
+    def mostraVista3D(self):
+        """Apre la finestra con la vista 3D dell'edificio"""
+        if not self.progetto.muri:
+            QMessageBox.information(self, "Vista 3D",
+                "Nessun muro presente. Disegna prima la struttura.")
+            return
+
+        dialogo = Dialogo3D(self.progetto, self)
+        dialogo.exec_()
 
     def zoomFit(self):
         if not self.progetto.muri:
