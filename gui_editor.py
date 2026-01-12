@@ -75,6 +75,30 @@ except ImportError:
     SEISMIC_AVAILABLE = False
     print("Avviso: modulo seismic.py non disponibile")
 
+# Import modulo solai
+try:
+    from Material.floors import (
+        Floor, Roof, FloorType, FloorStiffness, RoofType,
+        FloorStratigraphy, FLOOR_DATABASE, TYPICAL_STRATIFICATIONS,
+        get_floor_presets, calculate_seismic_mass
+    )
+    FLOORS_AVAILABLE = True
+except ImportError:
+    FLOORS_AVAILABLE = False
+    print("Avviso: modulo floors.py non disponibile")
+
+# Import modulo carichi climatici
+try:
+    from Material.loads import (
+        SnowLoad, WindLoad, SnowZone, WindZone,
+        SnowExposure, SnowThermal, ExposureCategory, TopographicClass,
+        calcola_carichi_climatici, get_zones_by_province, PROVINCE_ZONES
+    )
+    LOADS_AVAILABLE = True
+except ImportError:
+    LOADS_AVAILABLE = False
+    print("Avviso: modulo loads.py non disponibile")
+
 
 # ============================================================================
 # STRUTTURE DATI
@@ -91,6 +115,24 @@ class ParametriSismici:
     vita_nominale: float = 50.0  # anni
     classe_uso: int = 2  # I, II, III, IV
     fattore_struttura: float = 1.5  # q per muratura
+
+
+@dataclass
+class CarichiClimatici:
+    """Carichi neve e vento calcolati secondo NTC 2018"""
+    # Neve
+    zona_neve: str = "II"               # I-Alpina, I-Med, II, III
+    qsk: float = 1.0                    # Carico neve al suolo [kN/m2]
+    qs: float = 0.8                     # Carico neve su copertura [kN/m2]
+    esposizione_neve: str = "normale"   # battuta_venti, normale, riparata
+
+    # Vento
+    zona_vento: int = 3                 # 1-9
+    vb: float = 27.0                    # Velocita' riferimento [m/s]
+    qb: float = 0.45                    # Pressione cinetica [kN/m2]
+    p_vento: float = 1.0                # Pressione vento [kN/m2]
+    categoria_esposizione: int = 3      # I-V
+
 
 @dataclass
 class Muro:
@@ -195,6 +237,77 @@ class Cordolo:
 
 
 @dataclass
+class Solaio:
+    """Rappresenta un solaio del progetto"""
+    nome: str
+    piano: int                      # Piano (0 = terra)
+    tipo: str = "laterocemento"     # laterocemento, legno, acciaio, ca_pieno, volta
+    preset: str = "LAT_20+4"        # Preset dal database
+
+    # Geometria
+    luce: float = 5.0               # Luce [m]
+    larghezza: float = 5.0          # Larghezza [m]
+    orditura: float = 0.0           # Angolo orditura [gradi, 0=X]
+
+    # Carichi automatici da preset
+    peso_proprio: float = 3.2       # G1 [kN/m2]
+    peso_finiture: float = 1.5      # G2 [kN/m2]
+    carico_variabile: float = 2.0   # Qk [kN/m2]
+    categoria_uso: str = "A"        # Categoria NTC
+
+    # Rigidezza
+    rigidezza: str = "rigido"       # rigido, semi_rigido, flessibile
+
+    # Contorno (opzionale, per disegno)
+    vertici: List[Tuple[float, float]] = field(default_factory=list)
+    selected: bool = False
+
+    @property
+    def area(self) -> float:
+        """Area approssimata"""
+        if self.vertici and len(self.vertici) >= 3:
+            # Calcolo area poligono (formula del laccio)
+            n = len(self.vertici)
+            a = 0.0
+            for i in range(n):
+                j = (i + 1) % n
+                a += self.vertici[i][0] * self.vertici[j][1]
+                a -= self.vertici[j][0] * self.vertici[i][1]
+            return abs(a) / 2.0
+        return self.luce * self.larghezza
+
+    @property
+    def G1(self) -> float:
+        return self.peso_proprio
+
+    @property
+    def G2(self) -> float:
+        return self.peso_finiture
+
+    @property
+    def Gk(self) -> float:
+        return self.G1 + self.G2
+
+    @property
+    def Qk(self) -> float:
+        return self.carico_variabile
+
+    @property
+    def carico_totale(self) -> float:
+        return self.Gk + self.Qk
+
+    def carico_progetto(self, combinazione: str = 'SLU') -> float:
+        """Carico di progetto per combinazione"""
+        if combinazione == 'SLU':
+            return 1.3 * self.G1 + 1.5 * self.G2 + 1.5 * self.Qk
+        elif combinazione == 'SLE':
+            return self.Gk + self.Qk
+        elif combinazione == 'SISMA':
+            return self.G1 + self.G2 + 0.3 * self.Qk
+        return self.carico_totale
+
+
+@dataclass
 class Progetto:
     """Contiene tutti i dati del progetto"""
     nome: str = "Nuovo Progetto"
@@ -206,12 +319,16 @@ class Progetto:
     piani: List[Piano] = field(default_factory=list)
     carichi: List[Carico] = field(default_factory=list)
     cordoli: List[Cordolo] = field(default_factory=list)
+    solai: List[Solaio] = field(default_factory=list)
     filepath: str = ""
     # Parametri sismici
     sismici: ParametriSismici = field(default_factory=ParametriSismici)
+    # Carichi climatici (neve/vento)
+    climatici: CarichiClimatici = field(default_factory=CarichiClimatici)
     # Parametri edificio
     n_piani: int = 1
     altezza_piano: float = 3.0
+    altitudine: float = 100.0  # Altitudine sito [m s.l.m.]
 
 
 # ============================================================================
@@ -1411,6 +1528,496 @@ class DialogoPlanimetria(QDialog):
         )
 
 
+class DialogoSolaio(QDialog):
+    """Dialogo per inserimento/modifica solaio"""
+
+    # Database preset solai (copiato da floors.py per evitare dipendenza)
+    PRESET_SOLAI = {
+        'LAT_16+4': {'tipo': 'laterocemento', 'desc': 'Laterocemento 16+4', 'peso': 2.80, 'rigidezza': 'rigido'},
+        'LAT_20+4': {'tipo': 'laterocemento', 'desc': 'Laterocemento 20+4', 'peso': 3.20, 'rigidezza': 'rigido'},
+        'LAT_24+4': {'tipo': 'laterocemento', 'desc': 'Laterocemento 24+4', 'peso': 3.50, 'rigidezza': 'rigido'},
+        'LEGNO_14x20': {'tipo': 'legno', 'desc': 'Travi legno 14x20', 'peso': 0.70, 'rigidezza': 'flessibile'},
+        'LEGNO_16x24': {'tipo': 'legno', 'desc': 'Travi legno 16x24', 'peso': 0.80, 'rigidezza': 'flessibile'},
+        'LEGNO_CONN': {'tipo': 'legno_connesso', 'desc': 'Legno con soletta', 'peso': 2.00, 'rigidezza': 'semi_rigido'},
+        'ACCIAIO_IPE200': {'tipo': 'acciaio', 'desc': 'IPE 200 + tavelloni', 'peso': 1.80, 'rigidezza': 'flessibile'},
+        'ACCIAIO_IPE240': {'tipo': 'acciaio', 'desc': 'IPE 240 + tavelloni', 'peso': 2.00, 'rigidezza': 'flessibile'},
+        'CA_15': {'tipo': 'ca_pieno', 'desc': 'Soletta c.a. 15cm', 'peso': 3.75, 'rigidezza': 'rigido'},
+        'CA_20': {'tipo': 'ca_pieno', 'desc': 'Soletta c.a. 20cm', 'peso': 5.00, 'rigidezza': 'rigido'},
+        'VOLTA_BOTTE': {'tipo': 'volta', 'desc': 'Volta a botte', 'peso': 4.00, 'rigidezza': 'semi_rigido'},
+        'VOLTA_CROCIERA': {'tipo': 'volta', 'desc': 'Volta a crociera', 'peso': 3.50, 'rigidezza': 'semi_rigido'},
+    }
+
+    # Stratigrafie tipiche
+    STRATIGRAFIE = {
+        'civile_standard': 1.50,      # kN/m2
+        'civile_riscaldamento': 2.00,
+        'terrazzo': 2.50,
+        'sottotetto': 0.30,
+        'nessuna': 0.0,
+    }
+
+    # Categorie uso NTC
+    CATEGORIE_USO = {
+        'A': ('Abitazione', 2.0),
+        'B': ('Uffici', 3.0),
+        'C1': ('Sale riunioni', 3.0),
+        'C2': ('Cinema, teatri', 4.0),
+        'C3': ('Musei, biblioteche', 5.0),
+        'D1': ('Negozi', 4.0),
+        'D2': ('Centri commerciali', 5.0),
+        'E': ('Archivi, magazzini', 6.0),
+        'H': ('Coperture non praticabili', 0.5),
+    }
+
+    def __init__(self, piani_disponibili: List[int], solaio: Optional[Solaio] = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Solaio" if solaio is None else f"Modifica Solaio {solaio.nome}")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        self.solaio_esistente = solaio
+
+        layout = QVBoxLayout(self)
+
+        # ---- Gruppo Identificazione ----
+        grp_id = QGroupBox("Identificazione")
+        form_id = QFormLayout(grp_id)
+
+        self.nome_edit = QLineEdit()
+        self.nome_edit.setText(solaio.nome if solaio else "S1")
+        form_id.addRow("Nome:", self.nome_edit)
+
+        self.piano_combo = QComboBox()
+        for p in piani_disponibili:
+            self.piano_combo.addItem(f"Piano {p}", p)
+        if solaio:
+            idx = self.piano_combo.findData(solaio.piano)
+            if idx >= 0:
+                self.piano_combo.setCurrentIndex(idx)
+        form_id.addRow("Piano:", self.piano_combo)
+
+        layout.addWidget(grp_id)
+
+        # ---- Gruppo Tipologia ----
+        grp_tipo = QGroupBox("Tipologia strutturale")
+        form_tipo = QFormLayout(grp_tipo)
+
+        self.preset_combo = QComboBox()
+        for key, data in self.PRESET_SOLAI.items():
+            self.preset_combo.addItem(f"{key} - {data['desc']}", key)
+        if solaio and solaio.preset:
+            idx = self.preset_combo.findData(solaio.preset)
+            if idx >= 0:
+                self.preset_combo.setCurrentIndex(idx)
+        self.preset_combo.currentIndexChanged.connect(self.onPresetChanged)
+        form_tipo.addRow("Preset:", self.preset_combo)
+
+        self.peso_proprio_spin = QDoubleSpinBox()
+        self.peso_proprio_spin.setRange(0.1, 20.0)
+        self.peso_proprio_spin.setValue(solaio.peso_proprio if solaio else 3.2)
+        self.peso_proprio_spin.setSuffix(" kN/m²")
+        self.peso_proprio_spin.setDecimals(2)
+        form_tipo.addRow("Peso proprio G1:", self.peso_proprio_spin)
+
+        self.rigidezza_combo = QComboBox()
+        self.rigidezza_combo.addItems(["rigido", "semi_rigido", "flessibile"])
+        if solaio:
+            idx = self.rigidezza_combo.findText(solaio.rigidezza)
+            if idx >= 0:
+                self.rigidezza_combo.setCurrentIndex(idx)
+        form_tipo.addRow("Rigidezza:", self.rigidezza_combo)
+
+        layout.addWidget(grp_tipo)
+
+        # ---- Gruppo Geometria ----
+        grp_geom = QGroupBox("Geometria")
+        form_geom = QFormLayout(grp_geom)
+
+        self.luce_spin = QDoubleSpinBox()
+        self.luce_spin.setRange(1.0, 20.0)
+        self.luce_spin.setValue(solaio.luce if solaio else 5.0)
+        self.luce_spin.setSuffix(" m")
+        form_geom.addRow("Luce:", self.luce_spin)
+
+        self.larghezza_spin = QDoubleSpinBox()
+        self.larghezza_spin.setRange(1.0, 50.0)
+        self.larghezza_spin.setValue(solaio.larghezza if solaio else 5.0)
+        self.larghezza_spin.setSuffix(" m")
+        form_geom.addRow("Larghezza:", self.larghezza_spin)
+
+        self.orditura_spin = QDoubleSpinBox()
+        self.orditura_spin.setRange(0, 180)
+        self.orditura_spin.setValue(solaio.orditura if solaio else 0.0)
+        self.orditura_spin.setSuffix(" °")
+        self.orditura_spin.setToolTip("0° = orditura parallela a X, 90° = parallela a Y")
+        form_geom.addRow("Orditura:", self.orditura_spin)
+
+        layout.addWidget(grp_geom)
+
+        # ---- Gruppo Carichi ----
+        grp_carichi = QGroupBox("Carichi")
+        form_carichi = QFormLayout(grp_carichi)
+
+        self.stratigrafia_combo = QComboBox()
+        for key, peso in self.STRATIGRAFIE.items():
+            desc = key.replace('_', ' ').title()
+            self.stratigrafia_combo.addItem(f"{desc} ({peso:.2f} kN/m²)", key)
+        self.stratigrafia_combo.currentIndexChanged.connect(self.onStratigrafiaChanged)
+        form_carichi.addRow("Stratigrafia:", self.stratigrafia_combo)
+
+        self.peso_finiture_spin = QDoubleSpinBox()
+        self.peso_finiture_spin.setRange(0.0, 10.0)
+        self.peso_finiture_spin.setValue(solaio.peso_finiture if solaio else 1.5)
+        self.peso_finiture_spin.setSuffix(" kN/m²")
+        self.peso_finiture_spin.setDecimals(2)
+        form_carichi.addRow("Peso finiture G2:", self.peso_finiture_spin)
+
+        self.categoria_combo = QComboBox()
+        for cat, (desc, qk) in self.CATEGORIE_USO.items():
+            self.categoria_combo.addItem(f"{cat} - {desc} ({qk:.1f} kN/m²)", cat)
+        if solaio:
+            idx = self.categoria_combo.findData(solaio.categoria_uso)
+            if idx >= 0:
+                self.categoria_combo.setCurrentIndex(idx)
+        self.categoria_combo.currentIndexChanged.connect(self.onCategoriaChanged)
+        form_carichi.addRow("Categoria uso:", self.categoria_combo)
+
+        self.qk_spin = QDoubleSpinBox()
+        self.qk_spin.setRange(0.0, 20.0)
+        self.qk_spin.setValue(solaio.carico_variabile if solaio else 2.0)
+        self.qk_spin.setSuffix(" kN/m²")
+        self.qk_spin.setDecimals(2)
+        form_carichi.addRow("Carico variabile Qk:", self.qk_spin)
+
+        layout.addWidget(grp_carichi)
+
+        # ---- Riepilogo carichi ----
+        self.lbl_riepilogo = QLabel()
+        self.lbl_riepilogo.setStyleSheet("background: #f0f0f0; padding: 8px; border-radius: 4px;")
+        layout.addWidget(self.lbl_riepilogo)
+
+        # Aggiorna riepilogo
+        self.aggiornaRiepilogo()
+
+        # Connetti signals per aggiornare riepilogo
+        self.peso_proprio_spin.valueChanged.connect(self.aggiornaRiepilogo)
+        self.peso_finiture_spin.valueChanged.connect(self.aggiornaRiepilogo)
+        self.qk_spin.valueChanged.connect(self.aggiornaRiepilogo)
+        self.luce_spin.valueChanged.connect(self.aggiornaRiepilogo)
+        self.larghezza_spin.valueChanged.connect(self.aggiornaRiepilogo)
+
+        # ---- Pulsanti ----
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def onPresetChanged(self, index):
+        """Aggiorna valori quando cambia il preset"""
+        preset_key = self.preset_combo.currentData()
+        if preset_key in self.PRESET_SOLAI:
+            data = self.PRESET_SOLAI[preset_key]
+            self.peso_proprio_spin.setValue(data['peso'])
+            idx = self.rigidezza_combo.findText(data['rigidezza'])
+            if idx >= 0:
+                self.rigidezza_combo.setCurrentIndex(idx)
+
+    def onStratigrafiaChanged(self, index):
+        """Aggiorna peso finiture quando cambia stratigrafia"""
+        key = self.stratigrafia_combo.currentData()
+        if key in self.STRATIGRAFIE:
+            self.peso_finiture_spin.setValue(self.STRATIGRAFIE[key])
+
+    def onCategoriaChanged(self, index):
+        """Aggiorna Qk quando cambia categoria"""
+        cat = self.categoria_combo.currentData()
+        if cat in self.CATEGORIE_USO:
+            _, qk = self.CATEGORIE_USO[cat]
+            self.qk_spin.setValue(qk)
+
+    def aggiornaRiepilogo(self):
+        """Aggiorna il riepilogo carichi"""
+        G1 = self.peso_proprio_spin.value()
+        G2 = self.peso_finiture_spin.value()
+        Qk = self.qk_spin.value()
+        Gk = G1 + G2
+        totale = Gk + Qk
+
+        # Calcoli combinazioni
+        SLU = 1.3 * G1 + 1.5 * G2 + 1.5 * Qk
+        area = self.luce_spin.value() * self.larghezza_spin.value()
+
+        self.lbl_riepilogo.setText(
+            f"<b>Riepilogo Carichi:</b><br>"
+            f"G1 = {G1:.2f} kN/m² | G2 = {G2:.2f} kN/m² | Qk = {Qk:.2f} kN/m²<br>"
+            f"Totale caratteristico: <b>{totale:.2f} kN/m²</b><br>"
+            f"Combinazione SLU: <b>{SLU:.2f} kN/m²</b><br>"
+            f"Area: {area:.1f} m² | Carico totale: {totale * area:.1f} kN"
+        )
+
+    def getSolaio(self) -> Solaio:
+        """Restituisce l'oggetto Solaio con i dati inseriti"""
+        preset_key = self.preset_combo.currentData()
+        tipo = self.PRESET_SOLAI[preset_key]['tipo'] if preset_key in self.PRESET_SOLAI else 'laterocemento'
+
+        return Solaio(
+            nome=self.nome_edit.text() or "S1",
+            piano=self.piano_combo.currentData() or 0,
+            tipo=tipo,
+            preset=preset_key or "LAT_20+4",
+            luce=self.luce_spin.value(),
+            larghezza=self.larghezza_spin.value(),
+            orditura=self.orditura_spin.value(),
+            peso_proprio=self.peso_proprio_spin.value(),
+            peso_finiture=self.peso_finiture_spin.value(),
+            carico_variabile=self.qk_spin.value(),
+            categoria_uso=self.categoria_combo.currentData() or "A",
+            rigidezza=self.rigidezza_combo.currentText(),
+        )
+
+
+class DialogoCarichiClimatici(QDialog):
+    """Dialogo per configurare i carichi neve e vento"""
+
+    ZONE_NEVE = {
+        'I-Alpina': 'Zona I Alpina (Nord montano)',
+        'I-Med': 'Zona I Mediterranea (Pianura Padana)',
+        'II': 'Zona II (Centro Italia)',
+        'III': 'Zona III (Sud e isole)',
+    }
+
+    ESPOSIZIONI_NEVE = {
+        'battuta_venti': 'Battuta dai venti (CE=0.9)',
+        'normale': 'Normale (CE=1.0)',
+        'riparata': 'Riparata (CE=1.1)',
+    }
+
+    CATEGORIE_VENTO = {
+        1: 'I - Mare aperto, costa piatta',
+        2: 'II - Area agricola',
+        3: 'III - Area suburbana/industriale',
+        4: 'IV - Area urbana (edifici >15m)',
+        5: 'V - Centro citta (>15%)',
+    }
+
+    def __init__(self, provincia: str = "", altitudine: float = 100.0,
+                 altezza_edificio: float = 9.0, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Carichi Climatici (NTC 2018)")
+        self.setModal(True)
+        self.setMinimumWidth(550)
+
+        self.provincia = provincia
+        self.altitudine = altitudine
+        self.altezza_edificio = altezza_edificio
+
+        layout = QVBoxLayout(self)
+
+        # ---- Dati localita' ----
+        grp_loc = QGroupBox("Localizzazione")
+        form_loc = QFormLayout(grp_loc)
+
+        self.provincia_edit = QLineEdit(provincia)
+        self.provincia_edit.textChanged.connect(self.onProvinciaChanged)
+        form_loc.addRow("Provincia:", self.provincia_edit)
+
+        self.altitudine_spin = QDoubleSpinBox()
+        self.altitudine_spin.setRange(0, 3000)
+        self.altitudine_spin.setValue(altitudine)
+        self.altitudine_spin.setSuffix(" m s.l.m.")
+        self.altitudine_spin.valueChanged.connect(self.ricalcola)
+        form_loc.addRow("Altitudine:", self.altitudine_spin)
+
+        self.altezza_spin = QDoubleSpinBox()
+        self.altezza_spin.setRange(3, 100)
+        self.altezza_spin.setValue(altezza_edificio)
+        self.altezza_spin.setSuffix(" m")
+        self.altezza_spin.valueChanged.connect(self.ricalcola)
+        form_loc.addRow("Altezza edificio:", self.altezza_spin)
+
+        layout.addWidget(grp_loc)
+
+        # ---- Carico Neve ----
+        grp_neve = QGroupBox("Carico Neve")
+        form_neve = QFormLayout(grp_neve)
+
+        self.zona_neve_combo = QComboBox()
+        for key, desc in self.ZONE_NEVE.items():
+            self.zona_neve_combo.addItem(desc, key)
+        self.zona_neve_combo.currentIndexChanged.connect(self.ricalcola)
+        form_neve.addRow("Zona neve:", self.zona_neve_combo)
+
+        self.esp_neve_combo = QComboBox()
+        for key, desc in self.ESPOSIZIONI_NEVE.items():
+            self.esp_neve_combo.addItem(desc, key)
+        self.esp_neve_combo.setCurrentIndex(1)  # normale
+        self.esp_neve_combo.currentIndexChanged.connect(self.ricalcola)
+        form_neve.addRow("Esposizione:", self.esp_neve_combo)
+
+        self.pendenza_spin = QDoubleSpinBox()
+        self.pendenza_spin.setRange(0, 60)
+        self.pendenza_spin.setValue(0)
+        self.pendenza_spin.setSuffix(" °")
+        self.pendenza_spin.valueChanged.connect(self.ricalcola)
+        form_neve.addRow("Pendenza copertura:", self.pendenza_spin)
+
+        self.lbl_neve = QLabel()
+        self.lbl_neve.setStyleSheet("font-weight: bold; color: #0066cc;")
+        form_neve.addRow("Carico neve qs:", self.lbl_neve)
+
+        layout.addWidget(grp_neve)
+
+        # ---- Carico Vento ----
+        grp_vento = QGroupBox("Carico Vento")
+        form_vento = QFormLayout(grp_vento)
+
+        self.zona_vento_spin = QSpinBox()
+        self.zona_vento_spin.setRange(1, 9)
+        self.zona_vento_spin.setValue(3)
+        self.zona_vento_spin.valueChanged.connect(self.ricalcola)
+        form_vento.addRow("Zona vento:", self.zona_vento_spin)
+
+        self.cat_esp_combo = QComboBox()
+        for key, desc in self.CATEGORIE_VENTO.items():
+            self.cat_esp_combo.addItem(desc, key)
+        self.cat_esp_combo.setCurrentIndex(2)  # cat III
+        self.cat_esp_combo.currentIndexChanged.connect(self.ricalcola)
+        form_vento.addRow("Categoria esposizione:", self.cat_esp_combo)
+
+        self.lbl_vento = QLabel()
+        self.lbl_vento.setStyleSheet("font-weight: bold; color: #cc6600;")
+        form_vento.addRow("Pressione vento p:", self.lbl_vento)
+
+        layout.addWidget(grp_vento)
+
+        # ---- Riepilogo ----
+        self.lbl_riepilogo = QLabel()
+        self.lbl_riepilogo.setStyleSheet(
+            "background: #f5f5f5; padding: 10px; border-radius: 4px; font-family: monospace;"
+        )
+        self.lbl_riepilogo.setWordWrap(True)
+        layout.addWidget(self.lbl_riepilogo)
+
+        # ---- Pulsanti ----
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        # Auto-detect zone da provincia
+        self.onProvinciaChanged(provincia)
+        self.ricalcola()
+
+    def onProvinciaChanged(self, provincia: str):
+        """Auto-detect zone da provincia"""
+        if not LOADS_AVAILABLE:
+            return
+
+        zones = get_zones_by_province(provincia)
+        if zones:
+            snow_zone, wind_zone = zones
+            # Imposta zona neve
+            zona_neve_str = snow_zone.value
+            idx = self.zona_neve_combo.findData(zona_neve_str)
+            if idx >= 0:
+                self.zona_neve_combo.setCurrentIndex(idx)
+            # Imposta zona vento
+            self.zona_vento_spin.setValue(wind_zone.zone_num)
+
+    def ricalcola(self):
+        """Ricalcola i carichi"""
+        if not LOADS_AVAILABLE:
+            self.lbl_neve.setText("Modulo loads non disponibile")
+            self.lbl_vento.setText("Modulo loads non disponibile")
+            return
+
+        try:
+            # Parametri neve
+            zona_neve_str = self.zona_neve_combo.currentData()
+            zona_neve_map = {
+                'I-Alpina': SnowZone.I_ALPINA,
+                'I-Med': SnowZone.I_MEDITERRANEA,
+                'II': SnowZone.II,
+                'III': SnowZone.III,
+            }
+            zona_neve = zona_neve_map.get(zona_neve_str, SnowZone.II)
+
+            esp_neve_str = self.esp_neve_combo.currentData()
+            esp_neve_map = {
+                'battuta_venti': SnowExposure.BATTUTA_VENTI,
+                'normale': SnowExposure.NORMALE,
+                'riparata': SnowExposure.RIPARATA,
+            }
+            esp_neve = esp_neve_map.get(esp_neve_str, SnowExposure.NORMALE)
+
+            snow = SnowLoad(
+                zone=zona_neve,
+                altitude=self.altitudine_spin.value(),
+                exposure=esp_neve,
+                roof_slope=self.pendenza_spin.value()
+            )
+
+            self.lbl_neve.setText(f"{snow.qs:.2f} kN/m² (qsk={snow.qsk:.2f})")
+            self.snow_result = snow
+
+            # Parametri vento
+            zona_vento_num = self.zona_vento_spin.value()
+            zona_vento_map = {
+                1: WindZone.ZONE_1, 2: WindZone.ZONE_2, 3: WindZone.ZONE_3,
+                4: WindZone.ZONE_4, 5: WindZone.ZONE_5, 6: WindZone.ZONE_6,
+                7: WindZone.ZONE_7, 8: WindZone.ZONE_8, 9: WindZone.ZONE_9,
+            }
+            zona_vento = zona_vento_map.get(zona_vento_num, WindZone.ZONE_3)
+
+            cat_esp_num = self.cat_esp_combo.currentData()
+            cat_esp_map = {
+                1: ExposureCategory.I, 2: ExposureCategory.II,
+                3: ExposureCategory.III, 4: ExposureCategory.IV,
+                5: ExposureCategory.V,
+            }
+            cat_esp = cat_esp_map.get(cat_esp_num, ExposureCategory.III)
+
+            wind = WindLoad(
+                zone=zona_vento,
+                altitude=self.altitudine_spin.value(),
+                building_height=self.altezza_spin.value(),
+                exposure=cat_esp
+            )
+
+            self.lbl_vento.setText(f"{wind.p:.3f} kN/m² (vb={wind.vb:.1f} m/s)")
+            self.wind_result = wind
+
+            # Riepilogo
+            self.lbl_riepilogo.setText(
+                f"Altitudine: {self.altitudine_spin.value():.0f} m s.l.m.\n"
+                f"Altezza edificio: {self.altezza_spin.value():.1f} m\n\n"
+                f"NEVE:\n"
+                f"  Zona: {zona_neve_str} | qsk = {snow.qsk:.2f} kN/m²\n"
+                f"  CE = {snow.CE:.1f} | mu = {snow.mu:.2f}\n"
+                f"  qs = {snow.qs:.2f} kN/m²\n\n"
+                f"VENTO:\n"
+                f"  Zona: {zona_vento_num} | vb = {wind.vb:.1f} m/s\n"
+                f"  qb = {wind.qb:.3f} kN/m² | ce = {wind.ce:.2f}\n"
+                f"  p = {wind.p:.3f} kN/m²"
+            )
+
+        except Exception as e:
+            self.lbl_riepilogo.setText(f"Errore: {e}")
+
+    def getCarichiClimatici(self) -> CarichiClimatici:
+        """Restituisce l'oggetto CarichiClimatici"""
+        return CarichiClimatici(
+            zona_neve=self.zona_neve_combo.currentData() or "II",
+            qsk=self.snow_result.qsk if hasattr(self, 'snow_result') else 1.0,
+            qs=self.snow_result.qs if hasattr(self, 'snow_result') else 0.8,
+            esposizione_neve=self.esp_neve_combo.currentData() or "normale",
+            zona_vento=self.zona_vento_spin.value(),
+            vb=self.wind_result.vb if hasattr(self, 'wind_result') else 27.0,
+            qb=self.wind_result.qb if hasattr(self, 'wind_result') else 0.45,
+            p_vento=self.wind_result.p if hasattr(self, 'wind_result') else 1.0,
+            categoria_esposizione=self.cat_esp_combo.currentData() or 3,
+        )
+
+
 # ============================================================================
 # PANNELLO LATERALE
 # ============================================================================
@@ -1537,6 +2144,36 @@ class PannelloProprietà(QWidget):
 
         self.tabs.addTab(self.tab_cordoli, "Cordoli")
 
+        # Tab Solai
+        self.tab_solai = QWidget()
+        layout_solai = QVBoxLayout(self.tab_solai)
+        self.tabella_solai = QTableWidget()
+        self.tabella_solai.setColumnCount(8)
+        self.tabella_solai.setHorizontalHeaderLabels([
+            "Nome", "Piano", "Tipo", "Luce", "Larg", "G1+G2", "Qk", "Rigidezza"
+        ])
+        self.tabella_solai.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tabella_solai.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tabella_solai.doubleClicked.connect(self.modificaSolaio)
+        layout_solai.addWidget(self.tabella_solai)
+
+        btn_layout_solai = QHBoxLayout()
+        btn_add_solaio = QPushButton("+ Aggiungi Solaio")
+        btn_add_solaio.clicked.connect(self.aggiungiSolaio)
+        btn_layout_solai.addWidget(btn_add_solaio)
+
+        btn_mod_solaio = QPushButton("Modifica")
+        btn_mod_solaio.clicked.connect(self.modificaSolaio)
+        btn_layout_solai.addWidget(btn_mod_solaio)
+
+        btn_del_solaio = QPushButton("- Rimuovi")
+        btn_del_solaio.clicked.connect(self.rimuoviSolaio)
+        btn_layout_solai.addWidget(btn_del_solaio)
+
+        layout_solai.addLayout(btn_layout_solai)
+
+        self.tabs.addTab(self.tab_solai, "Solai")
+
         layout.addWidget(self.tabs)
 
     def setProgetto(self, progetto: Progetto):
@@ -1550,6 +2187,7 @@ class PannelloProprietà(QWidget):
         self.aggiornaTabelllaPiani()
         self.aggiornaTabelllaCarichi()
         self.aggiornaTabelllaCordoli()
+        self.aggiornaTabellaSolai()
 
     def aggiornaTabelllaMuri(self):
         if not self.progetto:
@@ -1922,6 +2560,103 @@ class PannelloProprietà(QWidget):
         self.progetto.carichi.append(carico)
         self.aggiornaTabelllaCarichi()
 
+    # ---------- SOLAI ----------
+
+    def aggiornaTabellaSolai(self):
+        """Aggiorna la tabella dei solai"""
+        if not self.progetto:
+            return
+
+        self.tabella_solai.setRowCount(len(self.progetto.solai))
+        for i, solaio in enumerate(self.progetto.solai):
+            self.tabella_solai.setItem(i, 0, QTableWidgetItem(solaio.nome))
+            self.tabella_solai.setItem(i, 1, QTableWidgetItem(str(solaio.piano)))
+            self.tabella_solai.setItem(i, 2, QTableWidgetItem(solaio.tipo))
+            self.tabella_solai.setItem(i, 3, QTableWidgetItem(f"{solaio.luce:.1f}"))
+            self.tabella_solai.setItem(i, 4, QTableWidgetItem(f"{solaio.larghezza:.1f}"))
+            Gk = solaio.Gk
+            self.tabella_solai.setItem(i, 5, QTableWidgetItem(f"{Gk:.2f}"))
+            self.tabella_solai.setItem(i, 6, QTableWidgetItem(f"{solaio.Qk:.2f}"))
+            self.tabella_solai.setItem(i, 7, QTableWidgetItem(solaio.rigidezza))
+
+    def aggiungiSolaio(self):
+        """Apre il dialogo per aggiungere un nuovo solaio"""
+        if not self.progetto:
+            return
+
+        # Determina piani disponibili
+        if self.progetto.piani:
+            piani = [p.indice for p in self.progetto.piani]
+        else:
+            piani = list(range(self.progetto.n_piani + 1))
+
+        # Genera nome automatico
+        n_solai = len(self.progetto.solai)
+        nome_default = f"S{n_solai + 1}"
+
+        dialogo = DialogoSolaio(piani, parent=self)
+
+        if dialogo.exec_() == QDialog.Accepted:
+            solaio = dialogo.getSolaio()
+            # Verifica nome univoco
+            nomi_esistenti = [s.nome for s in self.progetto.solai]
+            if solaio.nome in nomi_esistenti:
+                # Aggiungi suffisso
+                base = solaio.nome
+                i = 2
+                while f"{base}_{i}" in nomi_esistenti:
+                    i += 1
+                solaio.nome = f"{base}_{i}"
+
+            self.progetto.solai.append(solaio)
+            self.aggiornaTabellaSolai()
+
+    def modificaSolaio(self):
+        """Apre il dialogo per modificare il solaio selezionato"""
+        if not self.progetto:
+            return
+
+        row = self.tabella_solai.currentRow()
+        if row < 0 or row >= len(self.progetto.solai):
+            QMessageBox.information(self, "Info", "Seleziona un solaio dalla tabella")
+            return
+
+        solaio = self.progetto.solai[row]
+
+        # Determina piani disponibili
+        if self.progetto.piani:
+            piani = [p.indice for p in self.progetto.piani]
+        else:
+            piani = list(range(self.progetto.n_piani + 1))
+
+        dialogo = DialogoSolaio(piani, solaio=solaio, parent=self)
+
+        if dialogo.exec_() == QDialog.Accepted:
+            nuovo_solaio = dialogo.getSolaio()
+            self.progetto.solai[row] = nuovo_solaio
+            self.aggiornaTabellaSolai()
+
+    def rimuoviSolaio(self):
+        """Rimuove il solaio selezionato"""
+        if not self.progetto:
+            return
+
+        row = self.tabella_solai.currentRow()
+        if row < 0 or row >= len(self.progetto.solai):
+            QMessageBox.information(self, "Info", "Seleziona un solaio dalla tabella")
+            return
+
+        solaio = self.progetto.solai[row]
+        reply = QMessageBox.question(
+            self, "Conferma",
+            f"Rimuovere il solaio '{solaio.nome}'?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            del self.progetto.solai[row]
+            self.aggiornaTabellaSolai()
+
 
 # ============================================================================
 # FINESTRA PRINCIPALE
@@ -2104,6 +2839,20 @@ class MuraturaEditor(QMainWindow):
         self.mostra_plan_action.setChecked(True)
         self.mostra_plan_action.triggered.connect(self.togglePlanimetria)
         vista_menu.addAction(self.mostra_plan_action)
+
+        # Progetto menu
+        progetto_menu = menubar.addMenu("Progetto")
+
+        carichi_action = QAction("Carichi Climatici...", self)
+        carichi_action.setToolTip("Configura carichi neve e vento (NTC 2018)")
+        carichi_action.triggered.connect(self.editCarichiClimatici)
+        progetto_menu.addAction(carichi_action)
+
+        progetto_menu.addSeparator()
+
+        riepilogo_action = QAction("Riepilogo Progetto", self)
+        riepilogo_action.triggered.connect(self.mostraRiepilogoProgetto)
+        progetto_menu.addAction(riepilogo_action)
 
     def creaToolbar(self):
         toolbar = QToolBar("Strumenti")
@@ -2491,6 +3240,23 @@ class MuraturaEditor(QMainWindow):
                     y2=cordolo_def.y2
                 ))
 
+            # Solai
+            for solaio_def in dsl_project.solai:
+                self.progetto.solai.append(Solaio(
+                    nome=solaio_def.nome,
+                    piano=solaio_def.piano,
+                    tipo=solaio_def.tipo,
+                    preset=solaio_def.preset,
+                    luce=solaio_def.luce,
+                    larghezza=solaio_def.larghezza,
+                    orditura=solaio_def.orditura,
+                    peso_proprio=solaio_def.peso_proprio,
+                    peso_finiture=solaio_def.peso_finiture,
+                    carico_variabile=solaio_def.carico_variabile,
+                    categoria_uso=solaio_def.categoria_uso,
+                    rigidezza=solaio_def.rigidezza
+                ))
+
             self.canvas.setProgetto(self.progetto)
             self.pannello.setProgetto(self.progetto)
             self.aggiornaPianoCombo()
@@ -2591,6 +3357,19 @@ class MuraturaEditor(QMainWindow):
                         )
                 lines.append("")
 
+            # Solai
+            if self.progetto.solai:
+                lines.append("# SOLAI")
+                for solaio in self.progetto.solai:
+                    # SOLAIO nome piano tipo preset luce larghezza orditura G1 G2 Qk categoria rigidezza
+                    lines.append(
+                        f"SOLAIO {solaio.nome} {solaio.piano} {solaio.tipo} {solaio.preset} "
+                        f"{solaio.luce:.2f} {solaio.larghezza:.2f} {solaio.orditura:.1f} "
+                        f"{solaio.peso_proprio:.2f} {solaio.peso_finiture:.2f} {solaio.carico_variabile:.2f} "
+                        f"{solaio.categoria_uso} {solaio.rigidezza}"
+                    )
+                lines.append("")
+
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(lines))
 
@@ -2614,6 +3393,74 @@ class MuraturaEditor(QMainWindow):
             self.z_spin.setValue(z)
             self.h_spin.setValue(alt)
             self.s_spin.setValue(spess)
+
+    def editCarichiClimatici(self):
+        """Apre il dialogo per configurare i carichi climatici"""
+        # Calcola altezza edificio
+        if self.progetto.piani:
+            altezza = sum(p.altezza for p in self.progetto.piani)
+        else:
+            altezza = self.progetto.n_piani * self.progetto.altezza_piano
+
+        dialogo = DialogoCarichiClimatici(
+            provincia=self.progetto.sismici.provincia,
+            altitudine=self.progetto.altitudine,
+            altezza_edificio=altezza,
+            parent=self
+        )
+
+        if dialogo.exec_() == QDialog.Accepted:
+            self.progetto.climatici = dialogo.getCarichiClimatici()
+            self.progetto.altitudine = dialogo.altitudine_spin.value()
+            self.statusBar().showMessage(
+                f"Carichi climatici aggiornati - "
+                f"Neve: {self.progetto.climatici.qs:.2f} kN/m2, "
+                f"Vento: {self.progetto.climatici.p_vento:.3f} kN/m2"
+            )
+
+    def mostraRiepilogoProgetto(self):
+        """Mostra un riepilogo del progetto"""
+        p = self.progetto
+
+        # Calcola statistiche
+        area_muri = sum(m.lunghezza * m.altezza for m in p.muri)
+        vol_muri = sum(m.lunghezza * m.altezza * m.spessore for m in p.muri)
+        n_finestre = len([a for a in p.aperture if a.tipo == 'finestra'])
+        n_porte = len([a for a in p.aperture if a.tipo == 'porta'])
+
+        # Carichi totali dai solai
+        carico_tot = sum(s.carico_totale * s.area for s in p.solai)
+
+        msg = f"""
+RIEPILOGO PROGETTO: {p.nome}
+
+GEOMETRIA:
+  Muri: {len(p.muri)} (area {area_muri:.1f} m2, volume {vol_muri:.1f} m3)
+  Aperture: {n_finestre} finestre, {n_porte} porte
+  Piani: {len(p.piani) or p.n_piani}
+  Solai: {len(p.solai)}
+  Cordoli: {len(p.cordoli)}
+
+LOCALIZZAZIONE:
+  Comune: {p.sismici.comune or 'Non specificato'}
+  Provincia: {p.sismici.provincia or 'Non specificata'}
+  Altitudine: {p.altitudine:.0f} m s.l.m.
+
+CARICHI CLIMATICI (NTC 2018):
+  Neve (qs): {p.climatici.qs:.2f} kN/m2
+  Vento (p): {p.climatici.p_vento:.3f} kN/m2
+
+PARAMETRI SISMICI:
+  Sottosuolo: {p.sismici.sottosuolo}
+  Topografia: {p.sismici.topografia}
+  Classe d'uso: {p.sismici.classe_uso}
+  Fattore q: {p.sismici.fattore_struttura}
+
+CARICHI TOTALI:
+  Da solai: {carico_tot:.1f} kN
+"""
+
+        QMessageBox.information(self, "Riepilogo Progetto", msg.strip())
 
     def eliminaSelezionato(self):
         """Elimina l'elemento selezionato"""

@@ -166,6 +166,39 @@ class CordoloDef:
 
 
 @dataclass
+class SolaioDef:
+    """Definizione solaio"""
+    nome: str
+    piano: int                      # Piano (0 = terra)
+    tipo: str = "laterocemento"     # laterocemento, legno, acciaio, ca_pieno, volta
+    preset: str = "LAT_20+4"        # Preset dal database
+
+    # Geometria
+    luce: float = 5.0               # Luce [m]
+    larghezza: float = 5.0          # Larghezza [m]
+    orditura: float = 0.0           # Angolo orditura [gradi]
+
+    # Carichi
+    peso_proprio: float = 3.2       # G1 [kN/m2]
+    peso_finiture: float = 1.5      # G2 [kN/m2]
+    carico_variabile: float = 2.0   # Qk [kN/m2]
+    categoria_uso: str = "A"        # Categoria NTC
+
+    # Rigidezza
+    rigidezza: str = "rigido"       # rigido, semi_rigido, flessibile
+
+    @property
+    def Gk(self) -> float:
+        """Carico permanente totale [kN/m2]"""
+        return self.peso_proprio + self.peso_finiture
+
+    @property
+    def carico_totale(self) -> float:
+        """Carico totale caratteristico [kN/m2]"""
+        return self.Gk + self.carico_variabile
+
+
+@dataclass
 class DSLProject:
     """Progetto completo parsato dal DSL"""
     nome: str = "Senza nome"
@@ -177,6 +210,7 @@ class DSLProject:
     muri: List[MuroDef] = field(default_factory=list)  # Muri con coordinate
     aperture: List[AperturaDef] = field(default_factory=list)
     cordoli: List[CordoloDef] = field(default_factory=list)  # Cordoli
+    solai: List[SolaioDef] = field(default_factory=list)  # Solai
     carichi: Dict[int, CaricoDef] = field(default_factory=dict)
     analisi: List[AnalisiDef] = field(default_factory=list)
 
@@ -192,6 +226,7 @@ class DSLProject:
             f"Muri: {len(self.muri)}" if self.muri else "",
             f"Aperture: {len(self.aperture)}",
             f"Cordoli: {len(self.cordoli)}" if self.cordoli else "",
+            f"Solai: {len(self.solai)}" if self.solai else "",
             f"Carichi: {len(self.carichi)}",
             f"Analisi: {len(self.analisi)}",
         ]
@@ -217,7 +252,8 @@ class DSLParser:
         'PARETE', 'MURO', 'APERTURA', 'FINESTRA', 'PORTA',
         'CARICO', 'CARICHI', 'EDIFICIO',
         'PUSHOVER', 'MODALE', 'STATICA',
-        'CORDOLO', 'CORDOLO_LINEA'
+        'CORDOLO', 'CORDOLO_LINEA',
+        'SOLAIO'
     }
 
     def __init__(self, filepath: str):
@@ -351,6 +387,8 @@ class DSLParser:
                 self._parse_cordolo(args, line_num)
             elif command == 'CORDOLO_LINEA':
                 self._parse_cordolo_linea(args, line_num)
+            elif command == 'SOLAIO':
+                self._parse_solaio(args, line_num)
             else:
                 self.warnings.append(f"Riga {line_num}: Comando sconosciuto '{command}'")
         except Exception as e:
@@ -951,6 +989,55 @@ class DSLParser:
             materiale=materiale,
             x1=x1, y1=y1,
             x2=x2, y2=y2
+        ))
+
+    def _parse_solaio(self, args: List[str], line_num: int):
+        """
+        SOLAIO nome piano tipo preset luce larghezza orditura G1 G2 Qk categoria rigidezza
+
+        Definisce un solaio con tutti i parametri.
+
+        Esempio:
+        SOLAIO S1 1 laterocemento LAT_20+4 5.00 4.00 0.0 3.20 1.50 2.00 A rigido
+        """
+        if len(args) < 12:
+            raise DSLParseError(
+                f"SOLAIO richiede 12 parametri "
+                f"(nome piano tipo preset luce larghezza orditura G1 G2 Qk categoria rigidezza), "
+                f"trovati {len(args)}",
+                line_num
+            )
+
+        try:
+            nome = args[0]
+            piano = int(args[1])
+            tipo = args[2]
+            preset = args[3]
+            luce = float(args[4])
+            larghezza = float(args[5])
+            orditura = float(args[6])
+            peso_proprio = float(args[7])
+            peso_finiture = float(args[8])
+            carico_variabile = float(args[9])
+            categoria_uso = args[10]
+            rigidezza = args[11]
+
+        except ValueError as e:
+            raise DSLParseError(f"Valori numerici non validi: {e}", line_num)
+
+        self.project.solai.append(SolaioDef(
+            nome=nome,
+            piano=piano,
+            tipo=tipo,
+            preset=preset,
+            luce=luce,
+            larghezza=larghezza,
+            orditura=orditura,
+            peso_proprio=peso_proprio,
+            peso_finiture=peso_finiture,
+            carico_variabile=carico_variabile,
+            categoria_uso=categoria_uso,
+            rigidezza=rigidezza
         ))
 
     def _validate(self):
