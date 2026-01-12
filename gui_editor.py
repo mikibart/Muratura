@@ -3338,6 +3338,30 @@ class MuraturaEditor(QMainWindow):
         legenda_action.triggered.connect(self.mostraLegendaDCR)
         analisi_menu.addAction(legenda_action)
 
+        # Help menu
+        help_menu = menubar.addMenu("?")
+
+        guida_action = QAction("Manuale Utente (F1)", self)
+        guida_action.setShortcut("F1")
+        guida_action.triggered.connect(self.mostraManualeUtente)
+        help_menu.addAction(guida_action)
+
+        quickstart_action = QAction("Guida Rapida...", self)
+        quickstart_action.triggered.connect(self.mostraGuidaRapida)
+        help_menu.addAction(quickstart_action)
+
+        help_menu.addSeparator()
+
+        scorciatoie_action = QAction("Scorciatoie da tastiera...", self)
+        scorciatoie_action.triggered.connect(self.mostraScorciatoie)
+        help_menu.addAction(scorciatoie_action)
+
+        help_menu.addSeparator()
+
+        info_action = QAction("Informazioni su Muratura...", self)
+        info_action.triggered.connect(self.mostraInfo)
+        help_menu.addAction(info_action)
+
     def creaToolbar(self):
         toolbar = QToolBar("Strumenti")
         toolbar.setIconSize(QSize(24, 24))
@@ -4209,6 +4233,316 @@ Rosso:         DCR > 1.2   - Critico
 La verifica e' soddisfatta quando DCR <= 1.0
 """
         QMessageBox.information(self, "Legenda DCR", legenda.strip())
+
+    def mostraManualeUtente(self):
+        """Mostra il manuale utente completo"""
+        manuale = """
+<h1>MURATURA - Manuale Utente</h1>
+<p><strong>Software per analisi strutturale di edifici in muratura</strong></p>
+<p>Versione 1.0 - Conforme NTC 2018</p>
+
+<hr>
+
+<h2>1. INTRODUZIONE</h2>
+<p>Muratura e' un software professionale per la progettazione e verifica sismica
+di edifici in muratura, secondo le Norme Tecniche per le Costruzioni 2018.</p>
+
+<h3>Funzionalita' principali:</h3>
+<ul>
+<li>Disegno pianta edificio con muri e aperture</li>
+<li>Calcolo automatico parametri sismici da localizzazione</li>
+<li>Definizione solai con calcolo automatico carichi</li>
+<li>Calcolo carichi climatici (neve e vento)</li>
+<li>Verifica elementi con calcolo DCR</li>
+<li>Calcolo indice di rischio sismico</li>
+<li>Vista 3D della struttura</li>
+<li>Generazione report HTML</li>
+</ul>
+
+<h2>2. CREAZIONE NUOVO PROGETTO</h2>
+<h3>2.1 Wizard Nuovo Progetto</h3>
+<p>File > Nuovo avvia il wizard che guida attraverso:</p>
+<ol>
+<li><strong>Dati Generali:</strong> Nome progetto, autore, numero piani</li>
+<li><strong>Localizzazione:</strong> Seleziona comune italiano per calcolo automatico parametri sismici (ag, F0, Tc*)</li>
+<li><strong>Parametri Sismici:</strong> Categoria suolo (A-E), topografia (T1-T4), vita nominale, classe d'uso</li>
+<li><strong>Riepilogo:</strong> Verifica dati prima di confermare</li>
+</ol>
+
+<h3>2.2 Parametri Sismici Automatici</h3>
+<p>Inserendo il nome del comune, il software recupera automaticamente:</p>
+<ul>
+<li>Coordinate geografiche</li>
+<li>Parametri spettrali (ag, F0, Tc*) per ogni stato limite</li>
+<li>Zona sismica</li>
+</ul>
+
+<h2>3. DISEGNO STRUTTURA</h2>
+<h3>3.1 Strumenti di Disegno</h3>
+<ul>
+<li><strong>Seleziona:</strong> Clicca su elementi per selezionarli ed editarli</li>
+<li><strong>Muro:</strong> Clicca punto iniziale, poi punto finale per disegnare un muro</li>
+<li><strong>Pan:</strong> Trascina per spostare la vista</li>
+</ul>
+
+<h3>3.2 Object Snap (OSNAP)</h3>
+<p>Attivabile da Vista > OSNAP:</p>
+<ul>
+<li><strong>Endpoint:</strong> Snap agli estremi dei muri</li>
+<li><strong>Midpoint:</strong> Snap al punto medio</li>
+<li><strong>Intersection:</strong> Snap alle intersezioni</li>
+<li><strong>Grid:</strong> Snap alla griglia</li>
+</ul>
+
+<h3>3.3 Aperture (Finestre/Porte)</h3>
+<p>Doppio clic su un muro per aggiungere aperture:</p>
+<ul>
+<li>Tipo: finestra o porta</li>
+<li>Dimensioni: larghezza, altezza</li>
+<li>Posizione: distanza dall'inizio del muro</li>
+<li>Davanzale: altezza da terra (0 per porte)</li>
+</ul>
+
+<h2>4. SOLAI</h2>
+<h3>4.1 Inserimento Solai</h3>
+<p>Da Progetto > Inserisci Solaio o dal pannello laterale tab "Solai":</p>
+<ul>
+<li>Seleziona preset (laterocemento, legno, putrelle)</li>
+<li>Definisci luce e larghezza</li>
+<li>Imposta direzione orditura</li>
+<li>Categoria d'uso (A-H) per carichi variabili automatici</li>
+</ul>
+
+<h3>4.2 Calcolo Carichi</h3>
+<p>Il software calcola automaticamente:</p>
+<ul>
+<li><strong>G1:</strong> Peso proprio strutturale (kN/m2)</li>
+<li><strong>G2:</strong> Carichi permanenti non strutturali (kN/m2)</li>
+<li><strong>Qk:</strong> Carico variabile da categoria d'uso (kN/m2)</li>
+</ul>
+
+<h2>5. CARICHI CLIMATICI</h2>
+<h3>5.1 Neve (NTC 2018 Cap. 3.4)</h3>
+<p>Da Progetto > Carichi Climatici:</p>
+<ul>
+<li>Zona neve (I, I-A, I-M, II, III)</li>
+<li>Esposizione (normale, riparata, esposta)</li>
+<li>Calcolo automatico qsk e qs</li>
+</ul>
+
+<h3>5.2 Vento (NTC 2018 Cap. 3.3)</h3>
+<ul>
+<li>Zona vento (1-9)</li>
+<li>Categoria di esposizione (I-V)</li>
+<li>Calcolo automatico velocita' e pressione</li>
+</ul>
+
+<h2>6. ANALISI E VERIFICA</h2>
+<h3>6.1 Verifica Semplificata</h3>
+<p>Analisi > Verifica Semplificata calcola il DCR per ogni muro:</p>
+<ul>
+<li>DCR = Domanda / Capacita'</li>
+<li>Verifica soddisfatta se DCR <= 1.0</li>
+</ul>
+
+<h3>6.2 Indice di Rischio Sismico</h3>
+<p>IR = PGA_capacita / PGA_domanda</p>
+<ul>
+<li>IR >= 1.0: Struttura verificata</li>
+<li>IR >= 0.8: Carenze moderate</li>
+<li>IR >= 0.6: Insufficiente</li>
+<li>IR < 0.6: Critico</li>
+</ul>
+
+<h3>6.3 Visualizzazione DCR</h3>
+<p>Analisi > Mostra Colorazione DCR per visualizzare graficamente lo stato:</p>
+<ul>
+<li>Verde: DCR <= 0.8 (sicuro)</li>
+<li>Giallo: DCR <= 1.0 (limite)</li>
+<li>Arancione: DCR <= 1.2 (superamento)</li>
+<li>Rosso: DCR > 1.2 (critico)</li>
+</ul>
+
+<h2>7. OUTPUT</h2>
+<h3>7.1 Vista 3D</h3>
+<p>Vista > Vista 3D (F3) apre la visualizzazione 3D:</p>
+<ul>
+<li>Trascinare per ruotare</li>
+<li>Shift+trascinare per pan</li>
+<li>Rotella per zoom</li>
+</ul>
+
+<h3>7.2 Report HTML</h3>
+<p>File > Esporta Report HTML (Ctrl+R) genera relazione con:</p>
+<ul>
+<li>Dati generali progetto</li>
+<li>Parametri sismici</li>
+<li>Carichi climatici</li>
+<li>Geometria strutturale</li>
+<li>Risultati verifiche e indice di rischio</li>
+</ul>
+
+<h2>8. NORMATIVA DI RIFERIMENTO</h2>
+<ul>
+<li>NTC 2018 - D.M. 17/01/2018</li>
+<li>Circolare n. 7/2019</li>
+<li>EC8 - Eurocodice 8</li>
+</ul>
+
+<p><em>Per supporto: https://github.com/mikibart/Muratura</em></p>
+"""
+        # Mostra in finestra scrollabile
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Manuale Utente - Muratura")
+        dlg.setMinimumSize(700, 500)
+
+        layout = QVBoxLayout(dlg)
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setHtml(manuale)
+        layout.addWidget(text)
+
+        btn = QPushButton("Chiudi")
+        btn.clicked.connect(dlg.accept)
+        layout.addWidget(btn)
+
+        dlg.exec_()
+
+    def mostraGuidaRapida(self):
+        """Mostra guida rapida per iniziare"""
+        guida = """
+GUIDA RAPIDA - MURATURA
+
+1. CREA PROGETTO
+   File > Nuovo (Ctrl+N)
+   - Inserisci nome comune per parametri sismici automatici
+   - Seleziona categoria suolo e topografia
+
+2. DISEGNA MURI
+   - Seleziona strumento "Muro" dalla toolbar
+   - Clicca punto iniziale, poi punto finale
+   - La griglia e gli OSNAP aiutano il disegno preciso
+
+3. AGGIUNGI APERTURE
+   - Doppio clic su un muro per aprire dialogo
+   - Inserisci finestre e porte
+
+4. DEFINISCI SOLAI
+   - Progetto > Inserisci Solaio
+   - Oppure tab "Solai" nel pannello laterale
+
+5. ESEGUI VERIFICA
+   - Analisi > Verifica Semplificata
+   - Viene calcolato DCR e Indice di Rischio
+
+6. ESPORTA RISULTATI
+   - Vista > Vista 3D (F3) per vedere in 3D
+   - File > Esporta Report HTML (Ctrl+R)
+
+SCORCIATOIE UTILI
+─────────────────
+Ctrl+N    Nuovo progetto
+Ctrl+O    Apri progetto
+Ctrl+S    Salva
+Ctrl+R    Esporta Report
+F1        Manuale utente
+F3        Vista 3D
+Delete    Elimina selezione
+Rotella   Zoom
+"""
+        QMessageBox.information(self, "Guida Rapida", guida.strip())
+
+    def mostraScorciatoie(self):
+        """Mostra elenco scorciatoie da tastiera"""
+        scorciatoie = """
+SCORCIATOIE DA TASTIERA
+═══════════════════════════════════════
+
+FILE
+────────────────────────────────────────
+Ctrl+N        Nuovo progetto (wizard)
+Ctrl+O        Apri progetto (.mur)
+Ctrl+S        Salva progetto
+Ctrl+Shift+S  Salva come...
+Ctrl+R        Esporta report HTML
+Ctrl+Q        Esci
+
+MODIFICA
+────────────────────────────────────────
+Delete        Elimina elemento selezionato
+Doppio clic   Proprieta' elemento
+
+VISTA
+────────────────────────────────────────
+Ctrl+0        Adatta alla vista
+F3            Vista 3D
+Rotella       Zoom in/out
+Clic+Trascina Pan (con strumento Pan)
+
+DISEGNO
+────────────────────────────────────────
+Esc           Annulla disegno corrente
+Clic          Punto muro (con strumento Muro)
+
+AIUTO
+────────────────────────────────────────
+F1            Manuale utente
+"""
+        QMessageBox.information(self, "Scorciatoie da Tastiera", scorciatoie.strip())
+
+    def mostraInfo(self):
+        """Mostra informazioni sul programma"""
+        info = """
+<h2>MURATURA</h2>
+<p><strong>Software per Analisi Strutturale di Edifici in Muratura</strong></p>
+
+<p><strong>Versione:</strong> 1.0</p>
+<p><strong>Autore:</strong> mikibart</p>
+<p><strong>Licenza:</strong> MIT</p>
+
+<hr>
+
+<h3>Caratteristiche:</h3>
+<ul>
+<li>Interfaccia grafica completa (PyQt5)</li>
+<li>Database 8000+ comuni italiani</li>
+<li>Parametri sismici NTC 2018 automatici</li>
+<li>Calcolo carichi neve/vento NTC 2018</li>
+<li>7 metodi di analisi strutturale</li>
+<li>Calcolo DCR e indice di rischio</li>
+<li>Vista 3D isometrica</li>
+<li>Export report HTML</li>
+</ul>
+
+<h3>Normativa:</h3>
+<ul>
+<li>NTC 2018 (D.M. 17/01/2018)</li>
+<li>Circolare n. 7/2019</li>
+</ul>
+
+<h3>Contatti:</h3>
+<p>GitHub: <a href="https://github.com/mikibart/Muratura">
+https://github.com/mikibart/Muratura</a></p>
+
+<p><em>Sviluppato con assistenza di Claude AI (Anthropic)</em></p>
+"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Informazioni - Muratura")
+        dlg.setFixedSize(400, 450)
+
+        layout = QVBoxLayout(dlg)
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setHtml(info)
+        layout.addWidget(text)
+
+        btn = QPushButton("OK")
+        btn.clicked.connect(dlg.accept)
+        layout.addWidget(btn)
+
+        dlg.exec_()
 
     def eseguiVerificaSemplificata(self):
         """Esegue una verifica semplificata dei muri"""
