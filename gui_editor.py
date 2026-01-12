@@ -147,6 +147,10 @@ class Muro:
     spessore: float
     materiale: str
     selected: bool = False
+    # Risultati verifica (popolati dopo analisi)
+    dcr: float = 0.0          # Demand/Capacity Ratio (0=non calcolato)
+    dcr_tipo: str = ""        # Tipo verifica critica (taglio/flessione)
+    verificato: bool = True   # True se DCR <= 1.0
 
     @property
     def lunghezza(self) -> float:
@@ -385,6 +389,9 @@ class PiantaCanvas(QWidget):
 
         # Filtro piano
         self.solo_piano_corrente = False
+
+        # Visualizzazione DCR
+        self.mostra_dcr = False  # Colorazione muri per DCR
 
     def setProgetto(self, progetto: Progetto):
         self.progetto = progetto
@@ -721,6 +728,19 @@ class PiantaCanvas(QWidget):
         if muro.selected:
             colore = QColor(0, 120, 215)
             width = 4
+        elif self.mostra_dcr and muro.dcr > 0:
+            # Colorazione in base al DCR
+            if muro.dcr <= 0.5:
+                colore = QColor(0, 180, 0)       # Verde - sicuro
+            elif muro.dcr <= 0.8:
+                colore = QColor(100, 200, 0)    # Verde chiaro
+            elif muro.dcr <= 1.0:
+                colore = QColor(255, 200, 0)    # Giallo - attenzione
+            elif muro.dcr <= 1.2:
+                colore = QColor(255, 140, 0)    # Arancione
+            else:
+                colore = QColor(255, 0, 0)      # Rosso - critico
+            width = max(3, int(muro.spessore * self.scala / 4))
         else:
             # Colore in base alla quota z
             if muro.z == 0:
@@ -735,14 +755,23 @@ class PiantaCanvas(QWidget):
         painter.setPen(pen)
         painter.drawLine(p1, p2)
 
-        # Nome muro al centro
+        # Nome muro e DCR al centro
         centro = self.worldToScreen(*muro.centro)
         painter.setPen(QPen(Qt.black, 1))
         font = QFont()
         font.setPointSize(8)
         painter.setFont(font)
-        painter.drawText(int(centro.x()) - 10, int(centro.y()) - 5,
-                        f"{muro.nome}\n{muro.lunghezza:.1f}m")
+
+        if self.mostra_dcr and muro.dcr > 0:
+            # Mostra DCR invece della lunghezza
+            dcr_text = f"DCR={muro.dcr:.2f}"
+            if muro.dcr > 1.0:
+                dcr_text += " !"
+            painter.drawText(int(centro.x()) - 20, int(centro.y()) - 5,
+                            f"{muro.nome}\n{dcr_text}")
+        else:
+            painter.drawText(int(centro.x()) - 10, int(centro.y()) - 5,
+                            f"{muro.nome}\n{muro.lunghezza:.1f}m")
 
     def disegnaApertura(self, painter: QPainter, apertura: Apertura):
         """Disegna un'apertura su un muro"""
@@ -2854,6 +2883,26 @@ class MuraturaEditor(QMainWindow):
         riepilogo_action.triggered.connect(self.mostraRiepilogoProgetto)
         progetto_menu.addAction(riepilogo_action)
 
+        # Analisi menu
+        analisi_menu = menubar.addMenu("Analisi")
+
+        verifica_action = QAction("Verifica Semplificata...", self)
+        verifica_action.setToolTip("Calcola DCR semplificato per tutti i muri")
+        verifica_action.triggered.connect(self.eseguiVerificaSemplificata)
+        analisi_menu.addAction(verifica_action)
+
+        analisi_menu.addSeparator()
+
+        self.dcr_action = QAction("Mostra Colorazione DCR", self)
+        self.dcr_action.setCheckable(True)
+        self.dcr_action.setChecked(False)
+        self.dcr_action.triggered.connect(self.toggleDCR)
+        analisi_menu.addAction(self.dcr_action)
+
+        legenda_action = QAction("Legenda DCR", self)
+        legenda_action.triggered.connect(self.mostraLegendaDCR)
+        analisi_menu.addAction(legenda_action)
+
     def creaToolbar(self):
         toolbar = QToolBar("Strumenti")
         toolbar.setIconSize(QSize(24, 24))
@@ -3517,6 +3566,121 @@ CARICHI TOTALI:
         """Imposta il passo della griglia"""
         self.canvas.setPassoGriglia(passo)
         self.statusBar().showMessage(f"Passo griglia: {passo*100:.0f} cm")
+
+    def toggleDCR(self, checked):
+        """Attiva/disattiva visualizzazione DCR"""
+        self.canvas.mostra_dcr = checked
+        self.canvas.update()
+        if checked:
+            self.statusBar().showMessage("Visualizzazione DCR attiva")
+        else:
+            self.statusBar().showMessage("Visualizzazione DCR disattivata")
+
+    def mostraLegendaDCR(self):
+        """Mostra la legenda colori DCR"""
+        legenda = """
+LEGENDA COLORI DCR (Demand/Capacity Ratio)
+
+Verde scuro:   DCR <= 0.5  - Molto sicuro
+Verde chiaro:  DCR <= 0.8  - Sicuro
+Giallo:        DCR <= 1.0  - Limite verifica
+Arancione:     DCR <= 1.2  - Superamento lieve
+Rosso:         DCR > 1.2   - Critico
+
+La verifica e' soddisfatta quando DCR <= 1.0
+"""
+        QMessageBox.information(self, "Legenda DCR", legenda.strip())
+
+    def eseguiVerificaSemplificata(self):
+        """Esegue una verifica semplificata dei muri"""
+        if not self.progetto.muri:
+            QMessageBox.warning(self, "Avviso", "Nessun muro presente nel progetto")
+            return
+
+        # Parametri sismici semplificati
+        ag = 0.15  # PGA di default (g)
+        if SEISMIC_AVAILABLE and self.progetto.sismici.comune:
+            # Cerca nel database sismico
+            try:
+                analisi = SeismicAnalysis(
+                    comune=self.progetto.sismici.comune,
+                    VN=self.progetto.sismici.vita_nominale,
+                    use_class=UseClass(self.progetto.sismici.classe_uso)
+                )
+                ag = analisi.spectrum.ag
+            except:
+                pass
+
+        # Calcolo DCR semplificato per ogni muro
+        # Formula semplificata: DCR = Taglio_sismico / Resistenza_taglio
+        # Taglio_sismico approssimato da massa sismica * ag
+        # Resistenza_taglio da fvk * l * t
+
+        # Stima massa per piano
+        if self.progetto.solai:
+            massa_solaio = sum(s.carico_totale * s.area for s in self.progetto.solai) / 10  # kN -> ton approx
+        else:
+            massa_solaio = 100  # ton default
+
+        n_muri = len(self.progetto.muri)
+        taglio_per_muro = massa_solaio * ag * 10 / max(n_muri, 1)  # kN
+
+        # Resistenza taglio muratura (semplificata)
+        fvk0 = 0.2  # MPa (valore minimo NTC)
+        gamma_M = 2.0  # Coefficiente sicurezza
+
+        risultati = []
+        muri_critici = 0
+
+        for muro in self.progetto.muri:
+            # Resistenza taglio (semplificata)
+            # Vt = fvd * l * t
+            fvd = fvk0 / gamma_M  # MPa = N/mm2 = MN/m2
+            l = muro.lunghezza  # m
+            t = muro.spessore  # m
+
+            # Taglio resistente
+            Vt = fvd * 1000 * l * t  # kN
+
+            # DCR
+            dcr = taglio_per_muro / max(Vt, 0.01)
+
+            # Aggiorna muro
+            muro.dcr = dcr
+            muro.dcr_tipo = "taglio"
+            muro.verificato = (dcr <= 1.0)
+
+            if dcr > 1.0:
+                muri_critici += 1
+
+            risultati.append((muro.nome, dcr, muro.verificato))
+
+        # Attiva visualizzazione DCR
+        self.canvas.mostra_dcr = True
+        self.dcr_action.setChecked(True)
+        self.canvas.update()
+
+        # Mostra risultati
+        max_dcr = max(m.dcr for m in self.progetto.muri) if self.progetto.muri else 0
+        msg = f"""
+VERIFICA SEMPLIFICATA COMPLETATA
+
+Muri analizzati: {n_muri}
+Muri verificati: {n_muri - muri_critici}
+Muri critici (DCR > 1): {muri_critici}
+
+DCR massimo: {max_dcr:.2f}
+
+Parametri utilizzati:
+- ag = {ag:.3f} g
+- fvk0 = {fvk0:.2f} MPa
+- gamma_M = {gamma_M:.1f}
+
+NOTA: Questa e' una verifica semplificata a solo
+scopo indicativo. Per verifiche accurate utilizzare
+i moduli di analisi SAM, POR o PUSHOVER.
+"""
+        QMessageBox.information(self, "Risultati Verifica", msg.strip())
 
     def toggleQuote(self, checked):
         """Mostra/nascondi quote sui muri"""
