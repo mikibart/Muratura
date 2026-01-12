@@ -2770,6 +2770,13 @@ class MuraturaEditor(QMainWindow):
 
         file_menu.addSeparator()
 
+        report_action = QAction("Esporta Report HTML...", self)
+        report_action.setShortcut("Ctrl+R")
+        report_action.triggered.connect(self.esportaReportHTML)
+        file_menu.addAction(report_action)
+
+        file_menu.addSeparator()
+
         esci_action = QAction("Esci", self)
         esci_action.setShortcut("Ctrl+Q")
         esci_action.triggered.connect(self.close)
@@ -3510,6 +3517,164 @@ CARICHI TOTALI:
 """
 
         QMessageBox.information(self, "Riepilogo Progetto", msg.strip())
+
+    def esportaReportHTML(self):
+        """Esporta un report HTML completo del progetto"""
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Esporta Report HTML",
+            f"{self.progetto.nome}_report.html",
+            "File HTML (*.html);;Tutti i file (*)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            p = self.progetto
+            from datetime import datetime
+
+            # Calcola statistiche
+            area_muri = sum(m.lunghezza * m.altezza for m in p.muri)
+            vol_muri = sum(m.lunghezza * m.altezza * m.spessore for m in p.muri)
+            n_finestre = len([a for a in p.aperture if a.tipo == 'finestra'])
+            n_porte = len([a for a in p.aperture if a.tipo == 'porta'])
+            carico_tot = sum(s.carico_totale * s.area for s in p.solai)
+
+            # DCR statistics
+            if p.muri and any(m.dcr > 0 for m in p.muri):
+                max_dcr = max(m.dcr for m in p.muri)
+                muri_ok = sum(1 for m in p.muri if m.dcr <= 1.0 and m.dcr > 0)
+                muri_ko = sum(1 for m in p.muri if m.dcr > 1.0)
+                dcr_section = f"""
+        <h2>Risultati Verifica</h2>
+        <table>
+            <tr><th>Parametro</th><th>Valore</th></tr>
+            <tr><td>DCR Massimo</td><td class="{'ok' if max_dcr <= 1.0 else 'ko'}">{max_dcr:.3f}</td></tr>
+            <tr><td>Muri Verificati</td><td class="ok">{muri_ok}</td></tr>
+            <tr><td>Muri Non Verificati</td><td class="{'ok' if muri_ko == 0 else 'ko'}">{muri_ko}</td></tr>
+        </table>
+
+        <h3>Dettaglio Muri</h3>
+        <table>
+            <tr><th>Nome</th><th>L [m]</th><th>H [m]</th><th>s [m]</th><th>DCR</th><th>Stato</th></tr>
+"""
+                for m in p.muri:
+                    stato = "OK" if m.dcr <= 1.0 else "CRITICO"
+                    stato_class = "ok" if m.dcr <= 1.0 else "ko"
+                    dcr_section += f'            <tr><td>{m.nome}</td><td>{m.lunghezza:.2f}</td><td>{m.altezza:.2f}</td><td>{m.spessore:.2f}</td><td>{m.dcr:.3f}</td><td class="{stato_class}">{stato}</td></tr>\n'
+                dcr_section += "        </table>"
+            else:
+                dcr_section = "<p><em>Nessuna verifica eseguita. Usare Analisi > Verifica Semplificata.</em></p>"
+
+            # Genera HTML
+            html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Report {p.nome}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }}
+        h1 {{ color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 10px; }}
+        h2 {{ color: #0066cc; margin-top: 30px; }}
+        h3 {{ color: #666; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #0066cc; color: white; }}
+        tr:nth-child(even) {{ background-color: #f9f9f9; }}
+        .ok {{ color: green; font-weight: bold; }}
+        .ko {{ color: red; font-weight: bold; }}
+        .header {{ background: #f0f0f0; padding: 20px; border-radius: 8px; margin-bottom: 30px; }}
+        .footer {{ margin-top: 50px; padding-top: 20px; border-top: 1px solid #ddd; color: #666; font-size: 0.9em; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>RELAZIONE DI CALCOLO</h1>
+        <p><strong>Progetto:</strong> {p.nome}</p>
+        <p><strong>Autore:</strong> {p.autore or 'Non specificato'}</p>
+        <p><strong>Data:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+    </div>
+
+    <h2>1. Dati Generali</h2>
+    <table>
+        <tr><th>Parametro</th><th>Valore</th></tr>
+        <tr><td>Nome progetto</td><td>{p.nome}</td></tr>
+        <tr><td>Comune</td><td>{p.sismici.comune or 'Non specificato'}</td></tr>
+        <tr><td>Provincia</td><td>{p.sismici.provincia or 'Non specificata'}</td></tr>
+        <tr><td>Altitudine</td><td>{p.altitudine:.0f} m s.l.m.</td></tr>
+        <tr><td>Numero piani</td><td>{len(p.piani) or p.n_piani}</td></tr>
+        <tr><td>Altezza interpiano</td><td>{p.altezza_piano:.2f} m</td></tr>
+    </table>
+
+    <h2>2. Parametri Sismici (NTC 2018)</h2>
+    <table>
+        <tr><th>Parametro</th><th>Valore</th></tr>
+        <tr><td>Categoria sottosuolo</td><td>{p.sismici.sottosuolo}</td></tr>
+        <tr><td>Categoria topografica</td><td>{p.sismici.topografia}</td></tr>
+        <tr><td>Vita nominale VN</td><td>{p.sismici.vita_nominale:.0f} anni</td></tr>
+        <tr><td>Classe d'uso</td><td>{p.sismici.classe_uso}</td></tr>
+        <tr><td>Fattore di struttura q</td><td>{p.sismici.fattore_struttura:.2f}</td></tr>
+    </table>
+
+    <h2>3. Carichi Climatici (NTC 2018)</h2>
+    <table>
+        <tr><th>Tipo carico</th><th>Valore</th><th>Unita'</th></tr>
+        <tr><td>Carico neve qs</td><td>{p.climatici.qs:.2f}</td><td>kN/m2</td></tr>
+        <tr><td>Pressione vento p</td><td>{p.climatici.p_vento:.3f}</td><td>kN/m2</td></tr>
+    </table>
+
+    <h2>4. Geometria Strutturale</h2>
+    <table>
+        <tr><th>Elemento</th><th>Quantita'</th><th>Note</th></tr>
+        <tr><td>Muri</td><td>{len(p.muri)}</td><td>Area: {area_muri:.1f} m2, Volume: {vol_muri:.1f} m3</td></tr>
+        <tr><td>Finestre</td><td>{n_finestre}</td><td></td></tr>
+        <tr><td>Porte</td><td>{n_porte}</td><td></td></tr>
+        <tr><td>Solai</td><td>{len(p.solai)}</td><td>Carico totale: {carico_tot:.1f} kN</td></tr>
+        <tr><td>Cordoli</td><td>{len(p.cordoli)}</td><td></td></tr>
+    </table>
+
+    <h2>5. Solai</h2>
+    <table>
+        <tr><th>Nome</th><th>Piano</th><th>Tipo</th><th>G1 [kN/m2]</th><th>G2 [kN/m2]</th><th>Qk [kN/m2]</th><th>Rigidezza</th></tr>
+"""
+            for s in p.solai:
+                html += f'        <tr><td>{s.nome}</td><td>{s.piano}</td><td>{s.tipo}</td><td>{s.G1:.2f}</td><td>{s.G2:.2f}</td><td>{s.Qk:.2f}</td><td>{s.rigidezza}</td></tr>\n'
+
+            html += f"""    </table>
+
+    {dcr_section}
+
+    <h2>6. Normativa di Riferimento</h2>
+    <ul>
+        <li>NTC 2018 - Norme Tecniche per le Costruzioni (D.M. 17/01/2018)</li>
+        <li>Circolare n. 7/2019 - Istruzioni per l'applicazione delle NTC 2018</li>
+    </ul>
+
+    <div class="footer">
+        <p>Report generato da <strong>Muratura</strong> - Software per analisi strutturale di edifici in muratura</p>
+        <p>GitHub: <a href="https://github.com/mikibart/Muratura">https://github.com/mikibart/Muratura</a></p>
+    </div>
+</body>
+</html>
+"""
+            # Salva file
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(html)
+
+            self.statusBar().showMessage(f"Report esportato: {filepath}")
+
+            # Chiedi se aprire
+            reply = QMessageBox.question(
+                self, "Report Esportato",
+                f"Report salvato in:\n{filepath}\n\nAprire nel browser?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                import webbrowser
+                webbrowser.open(filepath)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Errore", f"Errore esportazione:\n{e}")
 
     def eliminaSelezionato(self):
         """Elimina l'elemento selezionato"""
