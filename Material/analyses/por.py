@@ -32,6 +32,9 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
+# Import centralizzato da enums.py
+from ..enums import LoadDistribution
+
 logger = logging.getLogger(__name__)
 
 # Tolleranza numerica per confronti con zero
@@ -76,12 +79,8 @@ class BoundaryConditions(Enum):
     FIXED_FIXED = "fixed-fixed"  # Doppio incastro
     FIXED_PINNED = "fixed-pinned"  # Incastro-cerniera
 
-class LoadDistribution(Enum):
-    """Metodi di distribuzione dei carichi"""
-    AREA = "area"  # Proporzionale all'area
-    EQUAL = "equal"  # Distribuzione uniforme
-    LENGTH = "length"  # Proporzionale alla lunghezza
-    STIFFNESS = "stiffness"  # Proporzionale alla rigidezza
+# LoadDistribution importato da ..enums (vedi import sopra)
+# Valori: AREA, EQUAL, UNIFORM, LENGTH, STIFFNESS, COUPLED
 
 # ========================= CLASSI OPZIONI =========================
 

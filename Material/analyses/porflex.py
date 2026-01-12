@@ -46,6 +46,9 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
+# Import centralizzato da enums.py
+from ..enums import LoadDistribution
+
 logger = logging.getLogger(__name__)
 
 # Tolleranza numerica per confronti con zero
@@ -90,13 +93,8 @@ class BoundaryConditions(Enum):
     FIXED_PINNED = "fixed-pinned"
     PINNED_PINNED = "pinned-pinned"
 
-class LoadDistribution(Enum):
-    """Metodi di distribuzione dei carichi"""
-    AREA = "area"
-    EQUAL = "equal"
-    LENGTH = "length"
-    STIFFNESS = "stiffness"
-    COUPLED = "coupled"  # Per PORFLEX: accoppiamento elastico con fasce
+# LoadDistribution importato da ..enums (vedi import sopra)
+# Valori: AREA, EQUAL, UNIFORM, LENGTH, STIFFNESS, COUPLED
 
 class CouplingModel(Enum):
     """Modelli di accoppiamento maschi-fasce"""

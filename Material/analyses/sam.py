@@ -30,6 +30,9 @@ from typing import Dict, List, Tuple, Union, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
+# Import centralizzato da enums.py
+from ..enums import LoadDistribution, LoadDistributionMethod
+
 # Configurazione logger con NullHandler per uso come libreria
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -111,11 +114,8 @@ class SpandrelType(Enum):
     REINFORCED = "reinforced"  # Armata
     ARCHED = "arched"  # Ad arco
 
-class LoadDistributionMethod(Enum):
-    """Metodo di ripartizione carichi"""
-    UNIFORM = "uniform"  # Uniforme
-    STIFFNESS = "stiffness"  # Pesata per rigidezza
-    AREA = "area"  # Pesata per area
+# LoadDistributionMethod importato da ..enums (alias di LoadDistribution)
+# Valori: UNIFORM, STIFFNESS, AREA, EQUAL, LENGTH, COUPLED
 
 # ===============================
 # CONFIGURAZIONE ANALISI

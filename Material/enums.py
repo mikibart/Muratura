@@ -20,6 +20,33 @@ Categorie:
 from enum import Enum
 
 # ============================================================================
+# DISTRIBUZIONE CARICHI (UNIFICATA per tutti i moduli di analisi)
+# ============================================================================
+
+class LoadDistribution(Enum):
+    """
+    Metodi di distribuzione dei carichi - ENUM UNIFICATA
+
+    Utilizzata da: POR, SAM, PORFLEX, FRAME
+
+    Note:
+        - UNIFORM e EQUAL sono equivalenti (distribuzione uniforme)
+        - COUPLED è specifico per PORFLEX (accoppiamento maschi-fasce)
+    """
+    # Metodi base
+    AREA = "area"           # Proporzionale all'area tributaria
+    EQUAL = "equal"         # Distribuzione uniforme (alias: UNIFORM)
+    UNIFORM = "uniform"     # Alias per EQUAL (retrocompatibilità SAM)
+    LENGTH = "length"       # Proporzionale alla lunghezza
+    STIFFNESS = "stiffness" # Proporzionale alla rigidezza
+
+    # Metodi avanzati (PORFLEX)
+    COUPLED = "coupled"     # Accoppiamento elastico maschi-fasce
+
+# Alias per retrocompatibilità con vecchi moduli
+LoadDistributionMethod = LoadDistribution  # Alias per SAM
+
+# ============================================================================
 # METODI E TIPOLOGIE DI ANALISI
 # ============================================================================
 

@@ -1050,25 +1050,20 @@ class DSLExporter:
             lines.append("# MATERIALI")
             for nome, mat in self.m.materiali.items():
                 # Determina se e' un materiale custom
+                # NOTA: MaterialProperties usa 'material_type' come stringa descrittiva
                 is_custom = False
                 tipo_str = "MATTONI_PIENI"
 
-                if hasattr(mat, 'masonry_type'):
-                    tipo_attr = getattr(mat, 'masonry_type', None)
-                    if tipo_attr is not None:
-                        if hasattr(tipo_attr, 'name'):
-                            tipo_str = tipo_attr.name
-                        else:
-                            tipo_str = str(tipo_attr)
-                elif hasattr(mat, 'material_type'):
-                    tipo_attr = getattr(mat, 'material_type', None)
-                    if tipo_attr is not None:
-                        if hasattr(tipo_attr, 'name'):
-                            tipo_str = tipo_attr.name
-                        else:
-                            tipo_str = str(tipo_attr)
-                            if 'custom' in tipo_str.lower():
-                                is_custom = True
+                # Usa material_type (attributo standard di MaterialProperties)
+                tipo_attr = getattr(mat, 'material_type', None)
+                if tipo_attr is not None and tipo_attr != "":
+                    if hasattr(tipo_attr, 'name'):
+                        # Se e' un enum
+                        tipo_str = tipo_attr.name
+                    else:
+                        tipo_str = str(tipo_attr)
+                        if 'custom' in tipo_str.lower() or 'multistrato' in tipo_str.lower():
+                            is_custom = True
 
                 if is_custom or tipo_str == "CUSTOM":
                     # Materiale custom
