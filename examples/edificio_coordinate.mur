@@ -1,0 +1,92 @@
+# ============================================================================
+# ESEMPIO EDIFICIO CON COORDINATE ASSOLUTE
+# ============================================================================
+# Edificio rettangolare 8.5m x 6.0m, 2 piani
+# Sistema di coordinate: X = Est-Ovest, Y = Nord-Sud, Z = quota
+# ============================================================================
+
+PROGETTO "Villa con Coordinate" AUTORE "Ing. Bianchi" DATA 2024-06-15
+
+# MATERIALE
+MATERIALE mattoni MATTONI_PIENI BUONA BUONO
+
+# ============================================================================
+# MURI PIANO TERRA (z = 0, altezza 3.2m)
+# ============================================================================
+# MURO nome x1 y1 x2 y2 z altezza spessore materiale
+
+# Parete Nord (lungo asse X, y=6)
+MURO PN 0 6 8.5 6 0 3.2 0.45 mattoni
+
+# Parete Sud (lungo asse X, y=0)
+MURO PS 0 0 8.5 0 0 3.2 0.45 mattoni
+
+# Parete Est (lungo asse Y, x=8.5)
+MURO PE 8.5 0 8.5 6 0 3.2 0.45 mattoni
+
+# Parete Ovest (lungo asse Y, x=0)
+MURO PO 0 0 0 6 0 3.2 0.45 mattoni
+
+# ============================================================================
+# MURI PIANO PRIMO (z = 3.2, altezza 3.0m)
+# ============================================================================
+
+MURO PN 0 6 8.5 6 3.2 3.0 0.30 mattoni
+MURO PS 0 0 8.5 0 3.2 3.0 0.30 mattoni
+MURO PE 8.5 0 8.5 6 3.2 3.0 0.30 mattoni
+MURO PO 0 0 0 6 3.2 3.0 0.30 mattoni
+
+# ============================================================================
+# APERTURE
+# ============================================================================
+# FINESTRA muro larghezza altezza distanza_da_inizio quota_da_base
+# PORTA muro larghezza altezza distanza_da_inizio
+
+# Piano terra - Parete Nord
+FINESTRA PN 1.2 1.4 2.0 0.9     # Finestra a 2m dall'angolo, 0.9m da terra
+FINESTRA PN 1.2 1.4 6.5 0.9     # Seconda finestra
+PORTA PN 1.0 2.1 4.25            # Porta centrale
+
+# Piano terra - Parete Sud
+FINESTRA PS 1.4 2.2 2.5 0.0     # Portafinestra
+FINESTRA PS 1.4 2.2 6.0 0.0     # Portafinestra
+
+# Piano terra - Parete Est
+FINESTRA PE 0.8 1.2 3.0 1.0
+
+# Piano primo - Parete Nord
+FINESTRA PN 1.2 1.4 2.0 0.9
+FINESTRA PN 1.2 1.4 6.5 0.9
+
+# Piano primo - Parete Sud
+FINESTRA PS 1.4 1.4 2.5 0.9
+FINESTRA PS 1.4 1.4 6.0 0.9
+
+# ============================================================================
+# CARICHI
+# ============================================================================
+CARICHI 5.0 2.0 copertura
+
+# ============================================================================
+# ANALISI
+# ============================================================================
+PUSHOVER push_X X triangular 0.04
+PUSHOVER push_Y Y triangular 0.04
+MODALE modale 6
+
+# ============================================================================
+# VISUALIZZAZIONE PIANTA (ASCII)
+# ============================================================================
+#
+#     Y ^
+#       |
+#    6  +-------PN--------+
+#       |                 |
+#       |                 |
+#   PO  |     INTERNO     | PE
+#       |                 |
+#       |                 |
+#    0  +-------PS--------+---> X
+#       0                8.5
+#
+# ============================================================================
