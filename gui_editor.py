@@ -333,6 +333,10 @@ class Progetto:
     n_piani: int = 1
     altezza_piano: float = 3.0
     altitudine: float = 100.0  # Altitudine sito [m s.l.m.]
+    # Risultati analisi
+    indice_rischio: float = 0.0  # IR = PGA_capacity / PGA_demand
+    pga_domanda: float = 0.0  # PGA di domanda (ag)
+    pga_capacita: float = 0.0  # PGA di capacita'
 
 
 # ============================================================================
@@ -3545,10 +3549,35 @@ CARICHI TOTALI:
                 max_dcr = max(m.dcr for m in p.muri)
                 muri_ok = sum(1 for m in p.muri if m.dcr <= 1.0 and m.dcr > 0)
                 muri_ko = sum(1 for m in p.muri if m.dcr > 1.0)
+
+                # Indice di rischio sismico
+                ir = p.indice_rischio if p.indice_rischio > 0 else (1.0 / max_dcr if max_dcr > 0 else 0)
+                if ir >= 1.0:
+                    ir_esito = "VERIFICATO"
+                    ir_class = "ok"
+                elif ir >= 0.8:
+                    ir_esito = "CARENTE"
+                    ir_class = "warn"
+                elif ir >= 0.6:
+                    ir_esito = "INSUFFICIENTE"
+                    ir_class = "ko"
+                else:
+                    ir_esito = "CRITICO"
+                    ir_class = "ko"
+
                 dcr_section = f"""
+        <h2>Indice di Rischio Sismico</h2>
+        <div style="background: #f0f0f0; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+            <span style="font-size: 48px; font-weight: bold; color: {'#28a745' if ir >= 1.0 else '#ffc107' if ir >= 0.8 else '#dc3545'};">{ir:.3f}</span>
+            <p style="font-size: 18px; margin: 10px 0;"><strong>{ir_esito}</strong></p>
+            <p>IR = PGA<sub>capacita'</sub> / PGA<sub>domanda</sub></p>
+            <p>PGA domanda: {p.pga_domanda:.3f} g | PGA capacita': {p.pga_capacita:.3f} g</p>
+        </div>
+
         <h2>Risultati Verifica</h2>
         <table>
             <tr><th>Parametro</th><th>Valore</th></tr>
+            <tr><td>Indice Rischio IR</td><td class="{ir_class}">{ir:.3f} ({ir_esito})</td></tr>
             <tr><td>DCR Massimo</td><td class="{'ok' if max_dcr <= 1.0 else 'ko'}">{max_dcr:.3f}</td></tr>
             <tr><td>Muri Verificati</td><td class="ok">{muri_ok}</td></tr>
             <tr><td>Muri Non Verificati</td><td class="{'ok' if muri_ko == 0 else 'ko'}">{muri_ko}</td></tr>
@@ -3582,6 +3611,7 @@ CARICHI TOTALI:
         th {{ background-color: #0066cc; color: white; }}
         tr:nth-child(even) {{ background-color: #f9f9f9; }}
         .ok {{ color: green; font-weight: bold; }}
+        .warn {{ color: #e67e00; font-weight: bold; }}
         .ko {{ color: red; font-weight: bold; }}
         .header {{ background: #f0f0f0; padding: 20px; border-radius: 8px; margin-bottom: 30px; }}
         .footer {{ margin-top: 50px; padding-top: 20px; border-top: 1px solid #ddd; color: #666; font-size: 0.9em; }}
@@ -3772,7 +3802,7 @@ La verifica e' soddisfatta quando DCR <= 1.0
                     VN=self.progetto.sismici.vita_nominale,
                     use_class=UseClass(self.progetto.sismici.classe_uso)
                 )
-                ag = analisi.spectrum.ag
+                ag = analisi.ag_SLV
             except:
                 pass
 
@@ -3825,25 +3855,68 @@ La verifica e' soddisfatta quando DCR <= 1.0
         self.dcr_action.setChecked(True)
         self.canvas.update()
 
-        # Mostra risultati
+        # Calcolo indice di rischio sismico (IR)
+        # IR = PGA_capacita / PGA_domanda
+        # PGA_capacita = ag / max(DCR) (semplificato)
         max_dcr = max(m.dcr for m in self.progetto.muri) if self.progetto.muri else 0
+
+        if max_dcr > 0:
+            # Indice di rischio: capacita / domanda
+            # Se DCR_max = 1 => IR = 1 (struttura al limite)
+            # Se DCR_max > 1 => IR < 1 (struttura insufficiente)
+            # Se DCR_max < 1 => IR > 1 (struttura sicura)
+            indice_rischio = 1.0 / max_dcr
+            pga_capacita = ag * indice_rischio  # PGA a cui la struttura raggiunge il limite
+        else:
+            indice_rischio = 0.0
+            pga_capacita = 0.0
+
+        # Salva nel progetto
+        self.progetto.indice_rischio = indice_rischio
+        self.progetto.pga_domanda = ag
+        self.progetto.pga_capacita = pga_capacita
+
+        # Valutazione esito
+        if indice_rischio >= 1.0:
+            esito = "VERIFICATO"
+            esito_dettaglio = "La struttura soddisfa i requisiti sismici NTC 2018"
+        elif indice_rischio >= 0.8:
+            esito = "CARENTE"
+            esito_dettaglio = "Struttura con carenze moderate - interventi consigliati"
+        elif indice_rischio >= 0.6:
+            esito = "INSUFFICIENTE"
+            esito_dettaglio = "Struttura insufficiente - interventi necessari"
+        else:
+            esito = "CRITICO"
+            esito_dettaglio = "Struttura fortemente carente - interventi urgenti"
+
+        # Mostra risultati
         msg = f"""
 VERIFICA SEMPLIFICATA COMPLETATA
 
+INDICE DI RISCHIO SISMICO
+═══════════════════════════════════════
+IR = {indice_rischio:.3f}   ({esito})
+═══════════════════════════════════════
+PGA domanda:  {ag:.3f} g
+PGA capacita': {pga_capacita:.3f} g
+{esito_dettaglio}
+
+RISULTATI VERIFICHE
+───────────────────────────────────────
 Muri analizzati: {n_muri}
 Muri verificati: {n_muri - muri_critici}
 Muri critici (DCR > 1): {muri_critici}
+DCR massimo: {max_dcr:.3f}
 
-DCR massimo: {max_dcr:.2f}
+PARAMETRI UTILIZZATI
+───────────────────────────────────────
+ag = {ag:.3f} g
+fvk0 = {fvk0:.2f} MPa
+gamma_M = {gamma_M:.1f}
 
-Parametri utilizzati:
-- ag = {ag:.3f} g
-- fvk0 = {fvk0:.2f} MPa
-- gamma_M = {gamma_M:.1f}
-
-NOTA: Questa e' una verifica semplificata a solo
-scopo indicativo. Per verifiche accurate utilizzare
-i moduli di analisi SAM, POR o PUSHOVER.
+NOTA: Verifica semplificata a scopo indicativo.
+Per verifiche accurate usare SAM, POR o PUSHOVER.
 """
         QMessageBox.information(self, "Risultati Verifica", msg.strip())
 
