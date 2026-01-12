@@ -99,6 +99,17 @@ except ImportError:
     LOADS_AVAILABLE = False
     print("Avviso: modulo loads.py non disponibile")
 
+# Import modulo analisi POR
+try:
+    from Material.analyses.por import (
+        analyze_por, MaterialProperties, AnalysisOptions,
+        MaterialType, FailureMode, format_results
+    )
+    POR_AVAILABLE = True
+except ImportError:
+    POR_AVAILABLE = False
+    print("Avviso: modulo por.py non disponibile")
+
 
 # ============================================================================
 # STRUTTURE DATI
@@ -3055,6 +3066,294 @@ class Vista3DWidget(QWidget):
         self.update()
 
 
+class DialogoAnalisiPOR(QDialog):
+    """Dialogo per configurare e eseguire analisi POR"""
+
+    def __init__(self, progetto: Progetto, parent=None):
+        super().__init__(parent)
+        self.progetto = progetto
+        self.risultati = None
+        self.setWindowTitle("Analisi POR - " + progetto.nome)
+        self.setMinimumSize(600, 500)
+
+        layout = QVBoxLayout(self)
+
+        # Materiale
+        mat_group = QGroupBox("Proprieta' Materiale")
+        mat_layout = QFormLayout()
+
+        self.mat_tipo = QComboBox()
+        self.mat_tipo.addItems([
+            "Muratura in mattoni pieni",
+            "Muratura in pietrame sbozzata",
+            "Muratura in blocchi laterizi",
+            "Muratura in blocchi calcestruzzo",
+            "Personalizzato"
+        ])
+        self.mat_tipo.currentIndexChanged.connect(self.onMaterialeChanged)
+        mat_layout.addRow("Tipologia:", self.mat_tipo)
+
+        self.fm_spin = QDoubleSpinBox()
+        self.fm_spin.setRange(0.5, 10.0)
+        self.fm_spin.setValue(2.4)
+        self.fm_spin.setSuffix(" MPa")
+        self.fm_spin.setDecimals(2)
+        mat_layout.addRow("fm (compressione):", self.fm_spin)
+
+        self.tau0_spin = QDoubleSpinBox()
+        self.tau0_spin.setRange(0.01, 0.5)
+        self.tau0_spin.setValue(0.06)
+        self.tau0_spin.setSuffix(" MPa")
+        self.tau0_spin.setDecimals(3)
+        mat_layout.addRow("tau0 (taglio):", self.tau0_spin)
+
+        self.E_spin = QDoubleSpinBox()
+        self.E_spin.setRange(500, 10000)
+        self.E_spin.setValue(1500)
+        self.E_spin.setSuffix(" MPa")
+        mat_layout.addRow("E (modulo):", self.E_spin)
+
+        mat_group.setLayout(mat_layout)
+        layout.addWidget(mat_group)
+
+        # Parametri analisi
+        param_group = QGroupBox("Parametri Analisi")
+        param_layout = QFormLayout()
+
+        self.gamma_m_spin = QDoubleSpinBox()
+        self.gamma_m_spin.setRange(1.0, 3.5)
+        self.gamma_m_spin.setValue(2.0)
+        self.gamma_m_spin.setDecimals(2)
+        param_layout.addRow("gamma_M:", self.gamma_m_spin)
+
+        self.fc_spin = QDoubleSpinBox()
+        self.fc_spin.setRange(1.0, 1.35)
+        self.fc_spin.setValue(1.35)
+        self.fc_spin.setDecimals(2)
+        param_layout.addRow("FC (conoscenza):", self.fc_spin)
+
+        self.lc_combo = QComboBox()
+        self.lc_combo.addItems(["LC1 (limitata)", "LC2 (adeguata)", "LC3 (accurata)"])
+        self.lc_combo.currentIndexChanged.connect(self.onLCChanged)
+        param_layout.addRow("Livello conoscenza:", self.lc_combo)
+
+        param_group.setLayout(param_layout)
+        layout.addWidget(param_group)
+
+        # Carichi
+        carichi_group = QGroupBox("Carichi")
+        carichi_layout = QFormLayout()
+
+        self.v_auto = QRadioButton("Automatico (da ag e massa)")
+        self.v_manuale = QRadioButton("Manuale")
+        self.v_auto.setChecked(True)
+        carichi_layout.addRow("Taglio sismico:", self.v_auto)
+        carichi_layout.addRow("", self.v_manuale)
+
+        self.v_spin = QDoubleSpinBox()
+        self.v_spin.setRange(0, 10000)
+        self.v_spin.setValue(100)
+        self.v_spin.setSuffix(" kN")
+        self.v_spin.setEnabled(False)
+        self.v_manuale.toggled.connect(self.v_spin.setEnabled)
+        carichi_layout.addRow("V orizzontale:", self.v_spin)
+
+        carichi_group.setLayout(carichi_layout)
+        layout.addWidget(carichi_group)
+
+        # Risultati
+        self.risultati_text = QTextEdit()
+        self.risultati_text.setReadOnly(True)
+        self.risultati_text.setMinimumHeight(150)
+        layout.addWidget(self.risultati_text)
+
+        # Pulsanti
+        btn_layout = QHBoxLayout()
+
+        esegui_btn = QPushButton("Esegui Analisi")
+        esegui_btn.clicked.connect(self.eseguiAnalisi)
+        btn_layout.addWidget(esegui_btn)
+
+        applica_btn = QPushButton("Applica a Muri")
+        applica_btn.clicked.connect(self.applicaRisultati)
+        btn_layout.addWidget(applica_btn)
+
+        chiudi_btn = QPushButton("Chiudi")
+        chiudi_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(chiudi_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Inizializza materiale
+        self.onMaterialeChanged(0)
+
+    def onMaterialeChanged(self, idx):
+        """Imposta valori materiale da tipologia"""
+        presets = [
+            (2.4, 0.06, 1500),  # Mattoni pieni
+            (2.0, 0.035, 1020),  # Pietrame sbozzata
+            (4.0, 0.13, 2500),  # Blocchi laterizi
+            (3.0, 0.10, 3000),  # Blocchi calcestruzzo
+            (2.0, 0.05, 1500),  # Personalizzato
+        ]
+        if idx < len(presets):
+            fm, tau0, E = presets[idx]
+            self.fm_spin.setValue(fm)
+            self.tau0_spin.setValue(tau0)
+            self.E_spin.setValue(E)
+
+        custom = (idx == 4)
+        self.fm_spin.setEnabled(custom)
+        self.tau0_spin.setEnabled(custom)
+        self.E_spin.setEnabled(custom)
+
+    def onLCChanged(self, idx):
+        """Imposta FC da livello conoscenza"""
+        fc_values = [1.35, 1.20, 1.00]
+        if idx < len(fc_values):
+            self.fc_spin.setValue(fc_values[idx])
+
+    def eseguiAnalisi(self):
+        """Esegue l'analisi POR su tutti i muri"""
+        if not POR_AVAILABLE:
+            QMessageBox.warning(self, "Errore", "Modulo POR non disponibile")
+            return
+
+        if not self.progetto.muri:
+            QMessageBox.warning(self, "Avviso", "Nessun muro nel progetto")
+            return
+
+        # Crea materiale
+        material = MaterialProperties(
+            fm=self.fm_spin.value(),
+            tau0=self.tau0_spin.value(),
+            E=self.E_spin.value(),
+            G=self.E_spin.value() / 2.5,  # G = E/2.5 approssimato
+            w=18.0  # Peso specifico standard muratura
+        )
+
+        # Opzioni analisi
+        options = AnalysisOptions(
+            gamma_m=self.gamma_m_spin.value(),
+            FC=self.fc_spin.value(),
+            include_self_weight=True
+        )
+
+        # Calcola taglio sismico
+        if self.v_auto.isChecked():
+            # Calcola da ag e massa
+            ag = self.progetto.pga_domanda if self.progetto.pga_domanda > 0 else 0.15
+            # Stima massa (solai + muri)
+            massa_solai = sum(s.carico_totale * s.area for s in self.progetto.solai) / 10 if self.progetto.solai else 100
+            massa_muri = sum(m.lunghezza * m.altezza * m.spessore * 18 for m in self.progetto.muri)  # 18 kN/m3
+            massa_totale = massa_solai + massa_muri / 10
+            V_totale = massa_totale * ag * 10  # kN
+        else:
+            V_totale = self.v_spin.value()
+
+        # Analizza ogni muro
+        risultati_muri = []
+        dcr_max = 0
+        n_verificati = 0
+
+        for muro in self.progetto.muri:
+            # Prepara dati muro
+            wall_data = {
+                'length': muro.lunghezza,
+                'height': muro.altezza,
+                'thickness': muro.spessore
+            }
+
+            # Carico verticale proporzionale alla lunghezza
+            tot_lunghezza = sum(m.lunghezza for m in self.progetto.muri)
+            N_muro = (muro.lunghezza / tot_lunghezza) * massa_totale * 10 if tot_lunghezza > 0 else 100
+            V_muro = (muro.lunghezza / tot_lunghezza) * V_totale if tot_lunghezza > 0 else V_totale / len(self.progetto.muri)
+
+            loads = {
+                'vertical': N_muro,
+                'horizontal': V_muro
+            }
+
+            try:
+                result = analyze_por(wall_data, material, loads, options)
+
+                # Estrai DCR
+                if 'global_capacity' in result:
+                    dcr = result.get('global_dcr', V_muro / max(result['global_capacity'].get('total_Vu', 1), 1))
+                else:
+                    dcr = 1.0
+
+                # Aggiorna muro
+                muro.dcr = dcr
+                muro.dcr_tipo = result.get('governing_failure', 'POR')
+                muro.verificato = (dcr <= 1.0)
+
+                if dcr > dcr_max:
+                    dcr_max = dcr
+                if dcr <= 1.0:
+                    n_verificati += 1
+
+                risultati_muri.append({
+                    'nome': muro.nome,
+                    'dcr': dcr,
+                    'Vu': result.get('global_capacity', {}).get('total_Vu', 0),
+                    'failure': result.get('governing_failure', 'N/A')
+                })
+
+            except Exception as e:
+                risultati_muri.append({
+                    'nome': muro.nome,
+                    'dcr': 999,
+                    'Vu': 0,
+                    'failure': f'Errore: {str(e)}'
+                })
+
+        # Calcola indice rischio
+        ir = 1.0 / dcr_max if dcr_max > 0 else 1.0
+        self.progetto.indice_rischio = ir
+        self.progetto.pga_domanda = ag if self.v_auto.isChecked() else 0.15
+        self.progetto.pga_capacita = self.progetto.pga_domanda * ir
+
+        # Mostra risultati
+        report = f"""
+RISULTATI ANALISI POR (NTC 2018)
+════════════════════════════════════════════════════
+
+INDICE DI RISCHIO SISMICO: {ir:.3f}
+{'VERIFICATO' if ir >= 1.0 else 'NON VERIFICATO'}
+
+Muri analizzati:    {len(self.progetto.muri)}
+Muri verificati:    {n_verificati}
+DCR massimo:        {dcr_max:.3f}
+
+DETTAGLIO MURI:
+────────────────────────────────────────────────────
+"""
+        for r in risultati_muri:
+            stato = "OK" if r['dcr'] <= 1.0 else "CRITICO"
+            report += f"{r['nome']:15} DCR={r['dcr']:.3f}  Vu={r['Vu']:.1f}kN  [{stato}]\n"
+
+        report += f"""
+────────────────────────────────────────────────────
+Parametri: gamma_M={self.gamma_m_spin.value()}, FC={self.fc_spin.value()}
+Materiale: fm={self.fm_spin.value()}MPa, tau0={self.tau0_spin.value()}MPa
+Taglio totale V = {V_totale:.1f} kN
+"""
+        self.risultati_text.setText(report)
+        self.risultati = risultati_muri
+
+    def applicaRisultati(self):
+        """Applica i risultati DCR ai muri e aggiorna la vista"""
+        if not self.risultati:
+            QMessageBox.information(self, "Info", "Eseguire prima l'analisi")
+            return
+
+        # Risultati gia' applicati durante l'analisi
+        QMessageBox.information(self, "Applicato",
+            f"DCR applicati a {len(self.risultati)} muri.\nAttivare Analisi > Mostra Colorazione DCR per visualizzare.")
+        self.accept()
+
+
 class Dialogo3D(QDialog):
     """Finestra per vista 3D dell'edificio"""
 
@@ -3325,6 +3624,11 @@ class MuraturaEditor(QMainWindow):
         verifica_action.setToolTip("Calcola DCR semplificato per tutti i muri")
         verifica_action.triggered.connect(self.eseguiVerificaSemplificata)
         analisi_menu.addAction(verifica_action)
+
+        por_action = QAction("Analisi POR (NTC 2018)...", self)
+        por_action.setToolTip("Analisi Pier Only Resistance secondo NTC 2018")
+        por_action.triggered.connect(self.eseguiAnalisiPOR)
+        analisi_menu.addAction(por_action)
 
         analisi_menu.addSeparator()
 
@@ -4543,6 +4847,26 @@ https://github.com/mikibart/Muratura</a></p>
         layout.addWidget(btn)
 
         dlg.exec_()
+
+    def eseguiAnalisiPOR(self):
+        """Apre il dialogo per l'analisi POR"""
+        if not POR_AVAILABLE:
+            QMessageBox.warning(self, "Modulo Non Disponibile",
+                "Il modulo di analisi POR non e' disponibile.\n"
+                "Verificare che Material/analyses/por.py sia presente.")
+            return
+
+        if not self.progetto.muri:
+            QMessageBox.information(self, "Analisi POR",
+                "Nessun muro presente. Disegna prima la struttura.")
+            return
+
+        dialogo = DialogoAnalisiPOR(self.progetto, self)
+        if dialogo.exec_() == QDialog.Accepted:
+            # Aggiorna visualizzazione DCR
+            self.canvas.mostra_dcr = True
+            self.dcr_action.setChecked(True)
+            self.canvas.update()
 
     def eseguiVerificaSemplificata(self):
         """Esegue una verifica semplificata dei muri"""
