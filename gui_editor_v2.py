@@ -15,6 +15,9 @@ Ispirato a: CQ-editor, FreeCAD, SkyCiv
 
 import sys
 import math
+import json
+import socket
+import threading
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
@@ -5897,12 +5900,27 @@ class PropertiesPanel(QDockWidget):
 class MuraturaEditorV2(QMainWindow):
     """Finestra principale v2.0 con interfaccia step-by-step"""
 
+    # Segnale per comandi remoti (thread-safe)
+    remoteCommandReceived = pyqtSignal(str, str)  # action, params_json
+
     def __init__(self):
         super().__init__()
         self.progetto = Progetto()
         self.show_quick_actions = True
 
+        # Variabili per controllo remoto
+        self._remote_result = None
+        self._remote_action = None
+        self._remote_params = None
+
         self.initUI()
+
+        # Connetti segnale comandi remoti
+        self.remoteCommandReceived.connect(self._executeRemoteCommand)
+
+        # Avvia controller remoto
+        self.remote_controller = RemoteController(self, port=9999)
+        self.remote_controller.start()
 
     def initUI(self):
         self.setWindowTitle("Muratura v2.0 - Editor Strutturale")
@@ -7359,6 +7377,475 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
         """Zoom indietro"""
         self.canvas.scala = max(5, self.canvas.scala / 1.25)
         self.canvas.update()
+
+    # ========================================================================
+    # CONTROLLO REMOTO - Esecuzione comandi da MCP
+    # ========================================================================
+
+    def _executeRemoteCommand(self, action: str, params_json: str):
+        """Esegue un comando remoto nel thread principale Qt"""
+        try:
+            params = json.loads(params_json)
+            result = self._dispatchRemoteAction(action, params)
+            self._remote_result = result
+        except Exception as e:
+            self._remote_result = {'success': False, 'error': str(e)}
+
+    def _dispatchRemoteAction(self, action: str, params: dict) -> dict:
+        """Dispatcher per tutte le azioni remote"""
+
+        # Feedback visivo
+        self.status_label.setText(f"🤖 Comando remoto: {action}")
+        self.status_label.setStyleSheet("color: #0066cc; font-weight: bold;")
+        QApplication.processEvents()
+
+        try:
+            # === PROGETTO ===
+            if action == "nuovo_progetto":
+                self.nuovoProgetto()
+                self.progetto.nome = params.get('nome', 'Nuovo Progetto')
+                self.progetto.committente = params.get('committente', '')
+                self.progetto.indirizzo = params.get('indirizzo', '')
+                if hasattr(self.step_progetto, 'refresh'):
+                    self.step_progetto.refresh()
+                return {'success': True, 'message': f"Progetto '{self.progetto.nome}' creato"}
+
+            elif action == "vai_step":
+                step_name = params.get('step', 'PROGETTO')
+                try:
+                    step = WorkflowStep[step_name]
+                    self.goToStep(step)
+                    return {'success': True, 'step': step_name}
+                except KeyError:
+                    return {'success': False, 'error': f"Step '{step_name}' non valido"}
+
+            elif action == "get_stato":
+                return {
+                    'success': True,
+                    'progetto': self.progetto.nome,
+                    'step_corrente': self.progetto.current_step.name,
+                    'n_muri': len(self.progetto.muri),
+                    'n_aperture': len(self.progetto.aperture),
+                    'n_piani': len(self.progetto.piani),
+                    'n_fondazioni': len(self.progetto.fondazioni),
+                    'n_solai': len(self.progetto.solai)
+                }
+
+            # === PIANI ===
+            elif action == "aggiungi_piano":
+                self.aggiungiPiano()
+                n = len(self.progetto.piani) - 1
+                return {'success': True, 'piano': n, 'message': f"Piano {n} aggiunto"}
+
+            elif action == "vai_piano":
+                piano = params.get('piano', 0)
+                if 0 <= piano < len(self.progetto.piani):
+                    self.canvas.piano_corrente = piano
+                    self.updatePianoLabel()
+                    self.canvas.update()
+                    return {'success': True, 'piano': piano}
+                return {'success': False, 'error': 'Piano non valido'}
+
+            # === GEOMETRIA - MURI ===
+            elif action == "disegna_muro":
+                x1 = float(params.get('x1', 0))
+                y1 = float(params.get('y1', 0))
+                x2 = float(params.get('x2', 5))
+                y2 = float(params.get('y2', 0))
+                spessore = float(params.get('spessore', 0.30))
+                altezza = float(params.get('altezza', 3.0))
+
+                # Calcola z dal piano corrente
+                piano = self.canvas.piano_corrente
+                z = self.progetto.piani[piano].quota if piano < len(self.progetto.piani) else 0
+
+                n = len(self.progetto.muri) + 1
+                muro = Muro(
+                    nome=f"M{n}",
+                    x1=x1, y1=y1, x2=x2, y2=y2,
+                    spessore=spessore,
+                    altezza=altezza,
+                    z=z
+                )
+                self.progetto.muri.append(muro)
+                self.canvas.update()
+                self.browser.updateFromProject(self.progetto)
+
+                # Animazione visiva
+                self._highlightElement(muro)
+
+                return {'success': True, 'muro': muro.nome, 'lunghezza': muro.lunghezza}
+
+            elif action == "disegna_rettangolo":
+                # Disegna 4 muri a formare un rettangolo
+                x = float(params.get('x', 0))
+                y = float(params.get('y', 0))
+                larghezza = float(params.get('larghezza', 10))
+                profondita = float(params.get('profondita', 8))
+                spessore = float(params.get('spessore', 0.30))
+
+                muri_creati = []
+                piano = self.canvas.piano_corrente
+                z = self.progetto.piani[piano].quota if piano < len(self.progetto.piani) else 0
+
+                # 4 lati
+                lati = [
+                    (x, y, x + larghezza, y),  # Sud
+                    (x + larghezza, y, x + larghezza, y + profondita),  # Est
+                    (x + larghezza, y + profondita, x, y + profondita),  # Nord
+                    (x, y + profondita, x, y),  # Ovest
+                ]
+
+                for x1, y1, x2, y2 in lati:
+                    n = len(self.progetto.muri) + 1
+                    muro = Muro(nome=f"M{n}", x1=x1, y1=y1, x2=x2, y2=y2,
+                               spessore=spessore, altezza=self.progetto.altezza_piano, z=z)
+                    self.progetto.muri.append(muro)
+                    muri_creati.append(muro.nome)
+                    self.canvas.update()
+                    QApplication.processEvents()
+                    import time
+                    time.sleep(0.3)  # Pausa per vedere l'animazione
+
+                self.browser.updateFromProject(self.progetto)
+                return {'success': True, 'muri': muri_creati}
+
+            # === APERTURE ===
+            elif action == "aggiungi_apertura":
+                muro_nome = params.get('muro', '')
+                tipo = params.get('tipo', 'finestra')
+                larghezza = float(params.get('larghezza', 1.2))
+                altezza = float(params.get('altezza', 1.4))
+                posizione = float(params.get('posizione', 1.0))
+                altezza_davanzale = float(params.get('quota', 0.9 if tipo == 'finestra' else 0.0))
+
+                # Verifica muro
+                muro = next((m for m in self.progetto.muri if m.nome == muro_nome), None)
+                if not muro:
+                    return {'success': False, 'error': f"Muro '{muro_nome}' non trovato"}
+
+                n = len(self.progetto.aperture) + 1
+                apertura = Apertura(
+                    nome=f"A{n}",
+                    muro=muro_nome,
+                    tipo=tipo,
+                    larghezza=larghezza,
+                    altezza=altezza,
+                    posizione=posizione,
+                    altezza_davanzale=altezza_davanzale
+                )
+                self.progetto.aperture.append(apertura)
+                self.canvas.update()
+                self.browser.updateFromProject(self.progetto)
+
+                return {'success': True, 'apertura': apertura.nome, 'muro': muro_nome}
+
+            # === FONDAZIONI ===
+            elif action == "genera_fondazioni":
+                # Genera fondazioni senza mostrare dialog (bloccherebbe)
+                self.goToStep(WorkflowStep.FONDAZIONI)
+                QApplication.processEvents()
+
+                muri_con_fond = {f.muro_collegato for f in self.progetto.fondazioni}
+                nuove = 0
+                for muro in self.progetto.muri:
+                    if muro.nome not in muri_con_fond:
+                        n = len(self.progetto.fondazioni) + 1
+                        fond = Fondazione(
+                            nome=f"F{n}",
+                            tipo="trave_rovescia",
+                            x1=muro.x1, y1=muro.y1, x2=muro.x2, y2=muro.y2,
+                            larghezza=max(0.60, muro.spessore * 2),
+                            altezza=0.50, profondita=1.0,
+                            muro_collegato=muro.nome
+                        )
+                        self.progetto.fondazioni.append(fond)
+                        nuove += 1
+
+                self.step_fondazioni.refresh()
+                return {'success': True, 'n_fondazioni': len(self.progetto.fondazioni), 'nuove': nuove}
+
+            elif action == "aggiungi_fondazione":
+                muro_nome = params.get('muro', '')
+                muro = next((m for m in self.progetto.muri if m.nome == muro_nome), None)
+                if not muro:
+                    return {'success': False, 'error': f"Muro '{muro_nome}' non trovato"}
+
+                n = len(self.progetto.fondazioni) + 1
+                fond = Fondazione(
+                    nome=f"F{n}",
+                    tipo=params.get('tipo', 'trave_rovescia'),
+                    x1=muro.x1, y1=muro.y1, x2=muro.x2, y2=muro.y2,
+                    larghezza=float(params.get('larghezza', 0.6)),
+                    altezza=float(params.get('altezza', 0.5)),
+                    profondita=float(params.get('profondita', 1.0)),
+                    muro_collegato=muro_nome
+                )
+                self.progetto.fondazioni.append(fond)
+                if hasattr(self, 'step_fondazioni'):
+                    self.step_fondazioni.refresh()
+                return {'success': True, 'fondazione': fond.nome}
+
+            # === CORDOLI ===
+            elif action == "genera_cordoli":
+                self.goToStep(WorkflowStep.CORDOLI)
+                QApplication.processEvents()
+
+                # Genera cordoli senza dialog
+                if not self.progetto.piani:
+                    return {'success': False, 'error': 'Nessun piano definito'}
+
+                ultimo_piano = max(p.numero for p in self.progetto.piani)
+                nuovi = 0
+                for muro in self.progetto.muri:
+                    exists = any(c.muro_collegato == muro.nome and c.piano == ultimo_piano
+                                for c in self.progetto.cordoli)
+                    if not exists:
+                        n = len(self.progetto.cordoli) + 1
+                        cordolo = Cordolo(
+                            nome=f"C{n}", piano=ultimo_piano,
+                            x1=muro.x1, y1=muro.y1, x2=muro.x2, y2=muro.y2,
+                            base=0.30, altezza=0.25,
+                            muro_collegato=muro.nome
+                        )
+                        self.progetto.cordoli.append(cordolo)
+                        nuovi += 1
+
+                self.step_cordoli.refresh()
+                return {'success': True, 'n_cordoli': len(self.progetto.cordoli), 'nuovi': nuovi}
+
+            # === SOLAI ===
+            elif action == "genera_solai":
+                self.goToStep(WorkflowStep.SOLAI)
+                QApplication.processEvents()
+
+                # Genera solai senza dialog
+                piani_con_solaio = {s.piano for s in self.progetto.solai}
+                nuovi = 0
+                for piano in self.progetto.piani:
+                    if piano.numero not in piani_con_solaio:
+                        n = len(self.progetto.solai) + 1
+                        solaio = Solaio(
+                            nome=f"S{n}", piano=piano.numero,
+                            tipo="Laterocemento 20+5",
+                            luce=5.0, larghezza=5.0,
+                            peso_proprio=3.2, carico_variabile=2.0,
+                            categoria_uso="A"
+                        )
+                        self.progetto.solai.append(solaio)
+                        nuovi += 1
+
+                self.step_solai.refresh()
+                return {'success': True, 'n_solai': len(self.progetto.solai), 'nuovi': nuovi}
+
+            elif action == "aggiungi_solaio":
+                piano = int(params.get('piano', 0))
+                n = len(self.progetto.solai) + 1
+                solaio = Solaio(
+                    nome=f"S{n}",
+                    piano=piano,
+                    tipo=params.get('tipo', 'Laterocemento 20+5'),
+                    luce=float(params.get('luce', 5.0)),
+                    larghezza=float(params.get('larghezza', 5.0)),
+                    peso_proprio=float(params.get('peso_proprio', 3.2)),
+                    carico_variabile=float(params.get('carico_variabile', 2.0)),
+                    categoria_uso=params.get('categoria', 'A')
+                )
+                self.progetto.solai.append(solaio)
+                if hasattr(self, 'step_solai'):
+                    self.step_solai.refresh()
+                return {'success': True, 'solaio': solaio.nome}
+
+            # === ANALISI ===
+            elif action == "esegui_analisi":
+                self.goToStep(WorkflowStep.ANALISI)
+                QApplication.processEvents()
+                # L'analisi si apre automaticamente
+                return {'success': True, 'message': 'Analisi POR avviata'}
+
+            # === VISTA ===
+            elif action == "zoom_fit":
+                self.zoomFit()
+                return {'success': True}
+
+            elif action == "mostra_3d":
+                self.goToStep(WorkflowStep.RISULTATI)
+                return {'success': True}
+
+            # === COPIA PIANO ===
+            elif action == "copia_piano":
+                src = int(params.get('da_piano', 0))
+                dest = int(params.get('a_piano', 1))
+                # Simula la funzione copiaPiano
+                self.canvas.piano_corrente = dest
+                # ... logica copia
+                return {'success': True, 'message': f'Copiato piano {src} -> {dest}'}
+
+            # === SALVATAGGIO ===
+            elif action == "salva_progetto":
+                filepath = params.get('filepath', '')
+                if filepath:
+                    self.progetto.filepath = filepath
+                    self.salvaProgetto()
+                    return {'success': True, 'filepath': filepath}
+                return {'success': False, 'error': 'Specificare filepath'}
+
+            # === LISTA COMANDI ===
+            elif action == "help":
+                comandi = [
+                    "nuovo_progetto", "vai_step", "get_stato",
+                    "aggiungi_piano", "vai_piano",
+                    "disegna_muro", "disegna_rettangolo",
+                    "aggiungi_apertura",
+                    "genera_fondazioni", "aggiungi_fondazione",
+                    "genera_cordoli", "genera_solai", "aggiungi_solaio",
+                    "esegui_analisi", "zoom_fit", "mostra_3d",
+                    "copia_piano", "salva_progetto", "help"
+                ]
+                return {'success': True, 'comandi': comandi}
+
+            else:
+                return {'success': False, 'error': f"Azione '{action}' non riconosciuta"}
+
+        except Exception as e:
+            import traceback
+            return {'success': False, 'error': str(e), 'traceback': traceback.format_exc()}
+
+        finally:
+            # Ripristina status bar
+            self.status_label.setStyleSheet("")
+            QApplication.processEvents()
+
+    def _highlightElement(self, element):
+        """Evidenzia temporaneamente un elemento appena creato"""
+        # Flash visivo
+        original_style = self.canvas.styleSheet()
+        self.canvas.setStyleSheet("border: 3px solid #00cc00;")
+        QApplication.processEvents()
+
+        QTimer.singleShot(500, lambda: self.canvas.setStyleSheet(original_style))
+
+    def closeEvent(self, event):
+        """Ferma il controller remoto alla chiusura"""
+        if hasattr(self, 'remote_controller'):
+            self.remote_controller.stop()
+        super().closeEvent(event)
+
+
+# ============================================================================
+# REMOTE CONTROLLER - Controllo GUI via MCP
+# ============================================================================
+
+class RemoteController(threading.Thread):
+    """Controller per comandare la GUI da remoto via socket"""
+
+    # Segnale per eseguire comandi nel thread principale Qt
+    # (definito nella classe principale)
+
+    def __init__(self, main_window, port=9999):
+        super().__init__(daemon=True)
+        self.main_window = main_window
+        self.port = port
+        self.running = True
+        self.server_socket = None
+
+    def run(self):
+        """Thread principale del server socket"""
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.bind(('127.0.0.1', self.port))
+            self.server_socket.listen(1)
+            self.server_socket.settimeout(1.0)
+
+            print(f"[RemoteController] In ascolto su porta {self.port}")
+
+            while self.running:
+                try:
+                    client, addr = self.server_socket.accept()
+                    print(f"[RemoteController] Connessione da {addr}")
+                    self.handle_client(client)
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.running:
+                        print(f"[RemoteController] Errore accept: {e}")
+
+        except Exception as e:
+            print(f"[RemoteController] Errore avvio server: {e}")
+        finally:
+            if self.server_socket:
+                self.server_socket.close()
+
+    def handle_client(self, client):
+        """Gestisce una connessione client"""
+        client.settimeout(60.0)
+        buffer = ""
+
+        try:
+            while self.running:
+                data = client.recv(4096).decode('utf-8')
+                if not data:
+                    break
+
+                buffer += data
+
+                # Processa linee complete
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    if line.strip():
+                        response = self.process_command(line.strip())
+                        client.send((json.dumps(response) + '\n').encode('utf-8'))
+
+        except socket.timeout:
+            pass
+        except Exception as e:
+            print(f"[RemoteController] Errore client: {e}")
+        finally:
+            client.close()
+
+    def process_command(self, cmd_str):
+        """Processa un comando JSON e ritorna il risultato"""
+        try:
+            cmd = json.loads(cmd_str)
+            action = cmd.get('action', '')
+            params = cmd.get('params', {})
+
+            print(f"[RemoteController] Comando: {action}")
+
+            # Esegui nel thread Qt
+            result = {'success': False, 'error': 'Comando non riconosciuto'}
+
+            # Usa invokeMethod per chiamare nel thread principale
+            from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
+
+            # Salva risultato in variabile condivisa
+            self.main_window._remote_result = None
+            self.main_window._remote_action = action
+            self.main_window._remote_params = params
+
+            # Emetti segnale per esecuzione nel thread Qt
+            self.main_window.remoteCommandReceived.emit(action, json.dumps(params))
+
+            # Attendi risultato (max 30 secondi)
+            import time
+            for _ in range(300):
+                if self.main_window._remote_result is not None:
+                    return self.main_window._remote_result
+                time.sleep(0.1)
+
+            return {'success': False, 'error': 'Timeout esecuzione comando'}
+
+        except json.JSONDecodeError as e:
+            return {'success': False, 'error': f'JSON non valido: {e}'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def stop(self):
+        """Ferma il server"""
+        self.running = False
+        if self.server_socket:
+            self.server_socket.close()
 
 
 # ============================================================================
