@@ -193,6 +193,26 @@ try:
 except ImportError as e:
     test("Nuovi step panels", False, str(e))
 
+# Test LayerManager e UndoCommand
+try:
+    from gui_editor_v2 import LayerManager, AddMuroCommand, DeleteMuroCommand, MoveMuroCommand
+    test("LayerManager", True)
+    test("AddMuroCommand", True)
+    test("DeleteMuroCommand", True)
+    test("MoveMuroCommand", True)
+except ImportError as e:
+    test("LayerManager/UndoCommands", False, str(e))
+
+# Test ThemeManager
+try:
+    from gui_editor_v2 import ThemeManager
+    test("ThemeManager", True)
+    test("ThemeManager.THEMES", 'light' in ThemeManager.THEMES and 'dark' in ThemeManager.THEMES, "Mancante")
+    test("ThemeManager.get_stylesheet", hasattr(ThemeManager, 'get_stylesheet'), "Mancante")
+    test("ThemeManager.toggle_theme", hasattr(ThemeManager, 'toggle_theme'), "Mancante")
+except ImportError as e:
+    test("ThemeManager", False, str(e))
+
 # Test SpettroWidget e GeometryValidator
 try:
     from gui_editor_v2 import SpettroWidget, GeometryValidator
@@ -243,10 +263,13 @@ test("Metodo specchiaMuri", 'specchiaMuri' in canvas_methods, "Mancante")
 test("Metodo offsetMuro", 'offsetMuro' in canvas_methods, "Mancante")
 test("Metodo startMisura", 'startMisura' in canvas_methods, "Mancante")
 
+# Verifica strumenti avanzati implementati
+test("Metodo handlePolygonClick", 'handlePolygonClick' in canvas_methods, "Mancante")
+test("Metodo closePolygon", 'closePolygon' in canvas_methods, "Mancante")
+test("Metodo showContextMenu", 'showContextMenu' in canvas_methods, "Mancante")
+
 # Strumenti ancora mancanti
 missing_tools = [
-    'Strumento Poligono - Disegna poligono chiuso',
-    'Strumento Ruota - Ruota elementi',
     'Strumento Taglia - Taglia muro',
     'Strumento Estendi - Estende muro',
 ]
@@ -270,13 +293,16 @@ try:
 except Exception as e:
     test("Funzioni export", False, str(e))
 
-# Export mancanti
+# Verifica nuovi metodi export implementati
+test("Metodo esportaDXF", 'esportaDXF' in editor_methods, "Mancante")
+test("Metodo esportaPDF", 'esportaPDF' in editor_methods, "Mancante")
+test("Metodo importaImmagine", 'importaImmagine' in editor_methods, "Mancante")
+test("Metodo ruotaMuri", 'ruotaMuri' in editor_methods, "Mancante")
+
+# Export ancora mancanti
 missing_exports = [
-    'Export DXF/DWG - Esportazione formato CAD',
-    'Export PDF - Esportazione PDF diretto',
     'Export IFC - Formato BIM',
     'Import DXF - Importa piante CAD',
-    'Import immagine - Importa planimetria raster',
 ]
 
 for exp in missing_exports:
@@ -377,16 +403,23 @@ try:
 except ImportError:
     test("Combinazioni", False, "Non trovato")
 
-# Conformità NTC ancora mancante
-missing_ntc = [
-    'Verifica snellezza pareti §7.8.2.2',
-    'Verifica eccentricità §7.8.2.2',
-    'Meccanismi locali §8.7.1',
-    'Classe rischio sismico - Sismabonus',
-]
-
-for ntc in missing_ntc:
-    missing_feature(f"NTC 2018: {ntc}")
+# Verifica classe VerificheNTC2018 implementata
+try:
+    from gui_editor_v2 import VerificheNTC2018
+    test("NTC: VerificheNTC2018 class", True)
+    test("NTC: Verifica snellezza §7.8.2.2", hasattr(VerificheNTC2018, 'verifica_snellezza'), "Mancante")
+    test("NTC: Verifica eccentricità §7.8.2.2", hasattr(VerificheNTC2018, 'verifica_eccentricita'), "Mancante")
+    test("NTC: Meccanismo ribaltamento §8.7.1", hasattr(VerificheNTC2018, 'verifica_meccanismo_ribaltamento'), "Mancante")
+    test("NTC: Classe rischio sismico - Sismabonus", hasattr(VerificheNTC2018, 'calcola_classe_rischio'), "Mancante")
+except ImportError:
+    missing_ntc = [
+        'Verifica snellezza pareti §7.8.2.2',
+        'Verifica eccentricità §7.8.2.2',
+        'Meccanismi locali §8.7.1',
+        'Classe rischio sismico - Sismabonus',
+    ]
+    for ntc in missing_ntc:
+        missing_feature(f"NTC 2018: {ntc}")
 
 # ==============================================================================
 # REPORT FINALE

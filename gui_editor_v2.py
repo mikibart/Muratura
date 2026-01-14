@@ -31,13 +31,41 @@ from PyQt5.QtWidgets import (
     QWizard, QWizardPage, QCompleter, QListWidget, QTextEdit,
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea,
     QTreeWidget, QTreeWidgetItem, QDockWidget, QToolButton,
-    QSizePolicy, QProgressBar, QCheckBox
+    QSizePolicy, QProgressBar, QCheckBox, QMenu, QSlider,
+    QUndoStack, QUndoCommand, QShortcut
 )
-from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QSize, QTimer
+from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QSize, QTimer, QByteArray
 from PyQt5.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QWheelEvent,
-    QMouseEvent, QPainterPath, QKeyEvent, QIcon, QPixmap
+    QMouseEvent, QPainterPath, QKeyEvent, QIcon, QPixmap,
+    QKeySequence, QImage
 )
+
+# Import librerie export
+try:
+    import ezdxf
+    DXF_AVAILABLE = True
+except ImportError:
+    DXF_AVAILABLE = False
+
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Table, Paragraph, Spacer, Image as RLImage
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm, mm
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+
+try:
+    from PIL import Image as PILImage
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
+import json
+import copy
 
 # Import moduli Muratura
 try:
@@ -166,6 +194,610 @@ ANALYSIS_METHODS = {
         'time': '> 60 sec'
     }
 }
+
+
+# ============================================================================
+# UNDO/REDO COMMANDS
+# ============================================================================
+
+class AddMuroCommand(QUndoCommand):
+    """Comando per aggiungere un muro (supporta undo/redo)"""
+    def __init__(self, progetto, muro, description="Aggiungi muro"):
+        super().__init__(description)
+        self.progetto = progetto
+        self.muro = muro
+
+    def redo(self):
+        self.progetto.muri.append(self.muro)
+
+    def undo(self):
+        if self.muro in self.progetto.muri:
+            self.progetto.muri.remove(self.muro)
+
+
+class DeleteMuroCommand(QUndoCommand):
+    """Comando per eliminare un muro"""
+    def __init__(self, progetto, muro, description="Elimina muro"):
+        super().__init__(description)
+        self.progetto = progetto
+        self.muro = muro
+        self.index = -1
+
+    def redo(self):
+        if self.muro in self.progetto.muri:
+            self.index = self.progetto.muri.index(self.muro)
+            self.progetto.muri.remove(self.muro)
+
+    def undo(self):
+        if self.index >= 0:
+            self.progetto.muri.insert(self.index, self.muro)
+
+
+class MoveMuroCommand(QUndoCommand):
+    """Comando per spostare un muro"""
+    def __init__(self, muro, dx, dy, description="Sposta muro"):
+        super().__init__(description)
+        self.muro = muro
+        self.dx = dx
+        self.dy = dy
+
+    def redo(self):
+        self.muro.x1 += self.dx
+        self.muro.y1 += self.dy
+        self.muro.x2 += self.dx
+        self.muro.y2 += self.dy
+
+    def undo(self):
+        self.muro.x1 -= self.dx
+        self.muro.y1 -= self.dy
+        self.muro.x2 -= self.dx
+        self.muro.y2 -= self.dy
+
+
+class RotateMuriCommand(QUndoCommand):
+    """Comando per ruotare muri selezionati"""
+    def __init__(self, muri, angolo, centro_x, centro_y, description="Ruota muri"):
+        super().__init__(description)
+        self.muri = muri
+        self.angolo = angolo
+        self.centro_x = centro_x
+        self.centro_y = centro_y
+        self.old_coords = [(m.x1, m.y1, m.x2, m.y2) for m in muri]
+
+    def redo(self):
+        rad = math.radians(self.angolo)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        for muro in self.muri:
+            # Ruota punto 1
+            dx1 = muro.x1 - self.centro_x
+            dy1 = muro.y1 - self.centro_y
+            muro.x1 = self.centro_x + dx1 * cos_a - dy1 * sin_a
+            muro.y1 = self.centro_y + dx1 * sin_a + dy1 * cos_a
+            # Ruota punto 2
+            dx2 = muro.x2 - self.centro_x
+            dy2 = muro.y2 - self.centro_y
+            muro.x2 = self.centro_x + dx2 * cos_a - dy2 * sin_a
+            muro.y2 = self.centro_y + dx2 * sin_a + dy2 * cos_a
+
+    def undo(self):
+        for i, muro in enumerate(self.muri):
+            muro.x1, muro.y1, muro.x2, muro.y2 = self.old_coords[i]
+
+
+# ============================================================================
+# THEME SYSTEM - Temi chiaro/scuro
+# ============================================================================
+
+class ThemeManager:
+    """Gestore dei temi dell'applicazione"""
+
+    THEMES = {
+        'light': {
+            'name': 'Chiaro',
+            'background': '#FFFFFF',
+            'surface': '#F5F5F5',
+            'primary': '#0078D4',
+            'secondary': '#5C6BC0',
+            'text': '#212121',
+            'text_secondary': '#757575',
+            'border': '#E0E0E0',
+            'canvas_bg': '#FFFFFF',
+            'grid': '#E8E8E8',
+            'selection': '#0078D4',
+            'hover': '#E3F2FD',
+            'error': '#D32F2F',
+            'warning': '#FFA000',
+            'success': '#388E3C',
+        },
+        'dark': {
+            'name': 'Scuro',
+            'background': '#1E1E1E',
+            'surface': '#252526',
+            'primary': '#0078D4',
+            'secondary': '#7986CB',
+            'text': '#FFFFFF',
+            'text_secondary': '#B0B0B0',
+            'border': '#3C3C3C',
+            'canvas_bg': '#2D2D2D',
+            'grid': '#3A3A3A',
+            'selection': '#264F78',
+            'hover': '#2A2D2E',
+            'error': '#F44336',
+            'warning': '#FFB74D',
+            'success': '#4CAF50',
+        }
+    }
+
+    _current_theme = 'light'
+    _callbacks = []
+
+    @classmethod
+    def current_theme(cls) -> str:
+        return cls._current_theme
+
+    @classmethod
+    def get(cls, key: str) -> str:
+        """Ottiene un colore dal tema corrente"""
+        return cls.THEMES[cls._current_theme].get(key, '#000000')
+
+    @classmethod
+    def set_theme(cls, theme_name: str):
+        """Imposta il tema corrente"""
+        if theme_name in cls.THEMES:
+            cls._current_theme = theme_name
+            for callback in cls._callbacks:
+                try:
+                    callback(theme_name)
+                except:
+                    pass
+
+    @classmethod
+    def toggle_theme(cls):
+        """Toggle tra tema chiaro e scuro"""
+        new_theme = 'dark' if cls._current_theme == 'light' else 'light'
+        cls.set_theme(new_theme)
+        return new_theme
+
+    @classmethod
+    def register_callback(cls, callback):
+        """Registra callback per cambio tema"""
+        cls._callbacks.append(callback)
+
+    @classmethod
+    def get_stylesheet(cls) -> str:
+        """Genera stylesheet Qt per il tema corrente"""
+        t = cls.THEMES[cls._current_theme]
+        return f"""
+            QMainWindow, QDialog {{
+                background-color: {t['background']};
+                color: {t['text']};
+            }}
+            QWidget {{
+                background-color: {t['background']};
+                color: {t['text']};
+            }}
+            QDockWidget {{
+                background-color: {t['surface']};
+                color: {t['text']};
+                titlebar-close-icon: url(close.png);
+            }}
+            QDockWidget::title {{
+                background-color: {t['surface']};
+                padding: 6px;
+                border-bottom: 1px solid {t['border']};
+            }}
+            QToolBar {{
+                background-color: {t['surface']};
+                border: none;
+                spacing: 3px;
+                padding: 3px;
+            }}
+            QPushButton {{
+                background-color: {t['surface']};
+                color: {t['text']};
+                border: 1px solid {t['border']};
+                padding: 6px 12px;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {t['hover']};
+            }}
+            QPushButton:pressed {{
+                background-color: {t['primary']};
+                color: white;
+            }}
+            QPushButton:checked {{
+                background-color: {t['primary']};
+                color: white;
+            }}
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+                background-color: {t['surface']};
+                color: {t['text']};
+                border: 1px solid {t['border']};
+                padding: 4px 8px;
+                border-radius: 4px;
+            }}
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+                border-color: {t['primary']};
+            }}
+            QTreeView, QListView, QTableView {{
+                background-color: {t['surface']};
+                color: {t['text']};
+                border: 1px solid {t['border']};
+                alternate-background-color: {t['hover']};
+            }}
+            QTreeView::item:hover, QListView::item:hover {{
+                background-color: {t['hover']};
+            }}
+            QTreeView::item:selected, QListView::item:selected {{
+                background-color: {t['selection']};
+            }}
+            QHeaderView::section {{
+                background-color: {t['surface']};
+                color: {t['text']};
+                padding: 4px;
+                border: none;
+                border-right: 1px solid {t['border']};
+                border-bottom: 1px solid {t['border']};
+            }}
+            QMenuBar {{
+                background-color: {t['surface']};
+                color: {t['text']};
+            }}
+            QMenuBar::item:selected {{
+                background-color: {t['hover']};
+            }}
+            QMenu {{
+                background-color: {t['surface']};
+                color: {t['text']};
+                border: 1px solid {t['border']};
+            }}
+            QMenu::item:selected {{
+                background-color: {t['selection']};
+            }}
+            QTabWidget::pane {{
+                border: 1px solid {t['border']};
+                background-color: {t['surface']};
+            }}
+            QTabBar::tab {{
+                background-color: {t['background']};
+                color: {t['text']};
+                padding: 8px 16px;
+                border: 1px solid {t['border']};
+                border-bottom: none;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {t['surface']};
+                border-bottom: 2px solid {t['primary']};
+            }}
+            QScrollBar:vertical {{
+                background-color: {t['background']};
+                width: 12px;
+                margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {t['border']};
+                min-height: 20px;
+                border-radius: 6px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {t['text_secondary']};
+            }}
+            QScrollBar:horizontal {{
+                background-color: {t['background']};
+                height: 12px;
+                margin: 0;
+            }}
+            QScrollBar::handle:horizontal {{
+                background-color: {t['border']};
+                min-width: 20px;
+                border-radius: 6px;
+                margin: 2px;
+            }}
+            QScrollBar::add-line, QScrollBar::sub-line {{
+                width: 0;
+                height: 0;
+            }}
+            QStatusBar {{
+                background-color: {t['surface']};
+                color: {t['text_secondary']};
+            }}
+            QGroupBox {{
+                font-weight: bold;
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 8px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }}
+            QLabel {{
+                color: {t['text']};
+            }}
+            QCheckBox {{
+                color: {t['text']};
+            }}
+            QRadioButton {{
+                color: {t['text']};
+            }}
+            QSlider::groove:horizontal {{
+                background-color: {t['border']};
+                height: 4px;
+                border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                background-color: {t['primary']};
+                width: 16px;
+                height: 16px;
+                margin: -6px 0;
+                border-radius: 8px;
+            }}
+            QProgressBar {{
+                background-color: {t['surface']};
+                border: 1px solid {t['border']};
+                border-radius: 4px;
+                text-align: center;
+            }}
+            QProgressBar::chunk {{
+                background-color: {t['primary']};
+                border-radius: 3px;
+            }}
+        """
+
+
+# ============================================================================
+# LAYER SYSTEM
+# ============================================================================
+
+class Layer:
+    """Definizione di un layer"""
+    def __init__(self, name: str, color: str = "#0064C8", visible: bool = True,
+                 locked: bool = False, printable: bool = True):
+        self.name = name
+        self.color = color
+        self.visible = visible
+        self.locked = locked
+        self.printable = printable
+
+
+class LayerManager(QDockWidget):
+    """Gestore dei layer del progetto"""
+
+    layerVisibilityChanged = pyqtSignal(str, bool)
+
+    PREDEFINED_LAYERS = {
+        'Geometria': {'color': '#0064C8', 'visible': True, 'locked': False},
+        'Aperture': {'color': '#C86400', 'visible': True, 'locked': False},
+        'Fondazioni': {'color': '#646464', 'visible': True, 'locked': False},
+        'Cordoli': {'color': '#00C864', 'visible': True, 'locked': False},
+        'Carichi': {'color': '#C80000', 'visible': True, 'locked': False},
+        'Risultati': {'color': '#FFA000', 'visible': True, 'locked': True},
+        'Quote': {'color': '#000000', 'visible': True, 'locked': False},
+        'Reference': {'color': '#808080', 'visible': False, 'locked': False}
+    }
+
+    def __init__(self, parent=None):
+        super().__init__("Layer", parent)
+        self.setMinimumWidth(200)
+        self.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+
+        self.layers = {}
+        for name, props in self.PREDEFINED_LAYERS.items():
+            self.layers[name] = Layer(name, **props)
+
+        self.setupUI()
+
+    def setupUI(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        # Toolbar layer
+        toolbar = QHBoxLayout()
+        btn_all_on = QPushButton("Tutti On")
+        btn_all_on.clicked.connect(self.showAllLayers)
+        btn_all_off = QPushButton("Tutti Off")
+        btn_all_off.clicked.connect(self.hideAllLayers)
+        toolbar.addWidget(btn_all_on)
+        toolbar.addWidget(btn_all_off)
+        layout.addLayout(toolbar)
+
+        # Lista layer
+        self.layer_list = QTreeWidget()
+        self.layer_list.setHeaderLabels(["", "Layer", "Colore"])
+        self.layer_list.setColumnWidth(0, 30)
+        self.layer_list.setColumnWidth(1, 100)
+        self.layer_list.setColumnWidth(2, 50)
+
+        for name, layer in self.layers.items():
+            item = QTreeWidgetItem()
+            item.setCheckState(0, Qt.Checked if layer.visible else Qt.Unchecked)
+            item.setText(1, name)
+            item.setData(1, Qt.UserRole, name)
+
+            # Colore
+            color_label = QLabel()
+            color_label.setFixedSize(20, 20)
+            color_label.setStyleSheet(f"background-color: {layer.color}; border: 1px solid #ccc;")
+
+            self.layer_list.addTopLevelItem(item)
+            self.layer_list.setItemWidget(item, 2, color_label)
+
+        self.layer_list.itemChanged.connect(self.onLayerChanged)
+        layout.addWidget(self.layer_list)
+
+        self.setWidget(widget)
+
+    def onLayerChanged(self, item, column):
+        if column == 0:
+            layer_name = item.data(1, Qt.UserRole)
+            visible = item.checkState(0) == Qt.Checked
+            if layer_name in self.layers:
+                self.layers[layer_name].visible = visible
+                self.layerVisibilityChanged.emit(layer_name, visible)
+
+    def showAllLayers(self):
+        for i in range(self.layer_list.topLevelItemCount()):
+            item = self.layer_list.topLevelItem(i)
+            item.setCheckState(0, Qt.Checked)
+
+    def hideAllLayers(self):
+        for i in range(self.layer_list.topLevelItemCount()):
+            item = self.layer_list.topLevelItem(i)
+            item.setCheckState(0, Qt.Unchecked)
+
+    def isLayerVisible(self, layer_name: str) -> bool:
+        if layer_name in self.layers:
+            return self.layers[layer_name].visible
+        return True
+
+
+# ============================================================================
+# NTC 2018 VERIFICHE
+# ============================================================================
+
+class VerificheNTC2018:
+    """Verifiche secondo NTC 2018 per murature"""
+
+    # Snellezza massima da Tab. 7.8.II NTC 2018
+    SNELLEZZA_MAX = {
+        'pietra_irregolare': 10,
+        'pietra_squadrata': 12,
+        'mattoni_pieni': 15,
+        'mattoni_semipieni': 15,
+        'blocchi_cls': 15,
+        'blocchi_laterizio': 15,
+        'muratura_armata': 15
+    }
+
+    @staticmethod
+    def verifica_snellezza(muro, tipo_muratura: str = 'mattoni_pieni') -> dict:
+        """
+        Verifica snellezza muratura §7.8.2.2 NTC 2018
+        λ = h₀/t ≤ λ_max
+        """
+        lambda_eff = muro.altezza / muro.spessore
+        lambda_max = VerificheNTC2018.SNELLEZZA_MAX.get(tipo_muratura, 15)
+        verificato = lambda_eff <= lambda_max
+
+        return {
+            'lambda': round(lambda_eff, 2),
+            'lambda_max': lambda_max,
+            'verificato': verificato,
+            'margine': round((lambda_max - lambda_eff) / lambda_max * 100, 1),
+            'ntc_ref': '§7.8.2.2 Tab. 7.8.II'
+        }
+
+    @staticmethod
+    def verifica_eccentricita(muro, e1: float = 0.0, e2: float = 0.0) -> dict:
+        """
+        Verifica eccentricità §7.8.2.2.2 NTC 2018
+        e = e1 + e2 ≤ 0.33t
+        """
+        e_totale = abs(e1) + abs(e2)
+        e_max = 0.33 * muro.spessore
+        verificato = e_totale <= e_max
+
+        return {
+            'e_totale': round(e_totale, 3),
+            'e_max': round(e_max, 3),
+            'verificato': verificato,
+            'rapporto': round(e_totale / e_max, 2) if e_max > 0 else 0,
+            'ntc_ref': '§7.8.2.2.2'
+        }
+
+    @staticmethod
+    def calcola_classe_rischio(IR: float) -> dict:
+        """
+        Calcola classe rischio sismico secondo Linee Guida Sismabonus
+        IR = Indice di Rischio (capacità / domanda)
+        """
+        if IR >= 1.0:
+            classe = 'A+'
+            descrizione = 'Edificio sicuro'
+        elif IR >= 0.80:
+            classe = 'A'
+            descrizione = 'Rischio molto basso'
+        elif IR >= 0.60:
+            classe = 'B'
+            descrizione = 'Rischio basso'
+        elif IR >= 0.45:
+            classe = 'C'
+            descrizione = 'Rischio medio-basso'
+        elif IR >= 0.30:
+            classe = 'D'
+            descrizione = 'Rischio medio'
+        elif IR >= 0.15:
+            classe = 'E'
+            descrizione = 'Rischio alto'
+        else:
+            classe = 'F'
+            descrizione = 'Rischio molto alto'
+
+        # Calcola salto di classe possibile con intervento
+        salti_possibili = 0
+        if IR < 0.15:
+            salti_possibili = 5
+        elif IR < 0.30:
+            salti_possibili = 4
+        elif IR < 0.45:
+            salti_possibili = 3
+        elif IR < 0.60:
+            salti_possibili = 2
+        elif IR < 0.80:
+            salti_possibili = 1
+
+        return {
+            'IR': round(IR, 3),
+            'classe': classe,
+            'descrizione': descrizione,
+            'salti_possibili': salti_possibili,
+            'colore': {
+                'A+': '#00AA00', 'A': '#00CC00', 'B': '#88CC00',
+                'C': '#CCCC00', 'D': '#CCAA00', 'E': '#CC6600', 'F': '#CC0000'
+            }.get(classe, '#808080')
+        }
+
+    @staticmethod
+    def verifica_meccanismo_ribaltamento(muro, ag: float, q: float = 2.0,
+                                          peso_solaio: float = 0.0) -> dict:
+        """
+        Verifica ribaltamento semplice §8.7.1 NTC 2018
+        Meccanismo cinematico di tipo 1
+        """
+        # Peso proprio muro (assumo 18 kN/m³)
+        gamma_mur = 18.0
+        peso_muro = muro.lunghezza * muro.spessore * muro.altezza * gamma_mur
+
+        # Baricentro
+        h_baricentro = muro.altezza / 2
+
+        # Momento stabilizzante
+        braccio_stab = muro.spessore / 2
+        M_stab = peso_muro * braccio_stab + peso_solaio * muro.spessore
+
+        # Forza sismica
+        alpha_0 = ag / q  # moltiplicatore sismico semplificato
+        F_sisma = alpha_0 * peso_muro
+
+        # Momento ribaltante
+        M_rib = F_sisma * h_baricentro
+
+        # Verifica
+        verificato = M_stab >= M_rib
+
+        return {
+            'M_stabilizzante': round(M_stab, 2),
+            'M_ribaltante': round(M_rib, 2),
+            'rapporto': round(M_stab / M_rib, 3) if M_rib > 0 else float('inf'),
+            'verificato': verificato,
+            'alpha_0': round(alpha_0, 3),
+            'ntc_ref': '§8.7.1'
+        }
 
 
 # ============================================================================
@@ -2126,7 +2758,7 @@ class StepCarichiPanel(QWidget):
 # ============================================================================
 
 class Vista3DWidget(QWidget):
-    """Widget per vista 3D isometrica dell'edificio"""
+    """Widget per vista 3D isometrica/prospettica dell'edificio"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2135,23 +2767,54 @@ class Vista3DWidget(QWidget):
 
         # Parametri vista
         self.scala = 25  # pixel per metro
-        self.rotazione = 30  # gradi
+        self.rotazione_h = 30  # rotazione orizzontale (gradi)
+        self.rotazione_v = 30  # rotazione verticale (gradi) - per prospettiva
         self.offset_x = 200
         self.offset_y = 350
         self.mostra_dcr = True
         self.mostra_aperture = True
+
+        # Modalità vista
+        self.prospettiva = False  # False = isometrica, True = prospettiva
+        self.distanza_camera = 50  # per prospettiva
+
+        # Mouse interaction
+        self.last_mouse_pos = None
+        self.dragging = False
+        self.panning = False
+
+        # Abilita tracking mouse per drag fluido
+        self.setMouseTracking(True)
 
     def setProgetto(self, progetto: Progetto):
         self.progetto = progetto
         self.update()
 
     def project3D(self, x: float, y: float, z: float) -> Tuple[int, int]:
-        """Proiezione isometrica 3D -> 2D"""
-        angle = math.radians(self.rotazione)
+        """Proiezione 3D -> 2D (isometrica o prospettiva)"""
+        angle_h = math.radians(self.rotazione_h)
+        angle_v = math.radians(self.rotazione_v)
 
-        # Isometrica semplificata
-        px = (x - y) * math.cos(angle) * self.scala + self.offset_x
-        py = -(x + y) * math.sin(angle) * self.scala * 0.5 - z * self.scala + self.offset_y
+        if self.prospettiva:
+            # Proiezione prospettica
+            # Rotazione orizzontale
+            rx = x * math.cos(angle_h) - y * math.sin(angle_h)
+            ry = x * math.sin(angle_h) + y * math.cos(angle_h)
+            rz = z
+
+            # Rotazione verticale
+            ry2 = ry * math.cos(angle_v) - rz * math.sin(angle_v)
+            rz2 = ry * math.sin(angle_v) + rz * math.cos(angle_v)
+
+            # Prospettiva
+            d = self.distanza_camera
+            factor = d / (d + ry2) if (d + ry2) > 0.1 else 1
+            px = rx * factor * self.scala + self.offset_x
+            py = -rz2 * factor * self.scala + self.offset_y
+        else:
+            # Proiezione isometrica classica
+            px = (x - y) * math.cos(angle_h) * self.scala + self.offset_x
+            py = -(x + y) * math.sin(angle_h) * self.scala * 0.5 - z * self.scala + self.offset_y
 
         return int(px), int(py)
 
@@ -2178,11 +2841,21 @@ class Vista3DWidget(QWidget):
         for fond in self.progetto.fondazioni:
             self.drawFondazione3D(painter, fond)
 
-        # Info
+        # Info vista
         painter.setPen(QPen(QColor(100, 100, 100)))
         painter.setFont(QFont("Arial", 9))
-        painter.drawText(10, 20, f"Vista Isometrica - {self.progetto.nome}")
+        modo = "Prospettiva" if self.prospettiva else "Isometrica"
+        painter.drawText(10, 20, f"Vista {modo} - {self.progetto.nome}")
         painter.drawText(10, 35, f"Muri: {len(self.progetto.muri)} | Piani: {len(self.progetto.piani)}")
+        painter.drawText(10, 50, f"Rot: {self.rotazione_h:.0f}° | Scala: {self.scala:.0f}x")
+
+        # Istruzioni
+        painter.setFont(QFont("Arial", 8))
+        painter.setPen(QPen(QColor(120, 120, 120)))
+        h = self.height()
+        painter.drawText(10, h - 45, "Comandi: Trascina = Ruota | Rotella = Zoom")
+        painter.drawText(10, h - 30, "Middle-click + Drag = Pan | P = Prospettiva")
+        painter.drawText(10, h - 15, "R = Reset vista | Home = Vista frontale")
 
     def drawPianoBase(self, painter, piano: Piano):
         """Disegna base piano come griglia"""
@@ -2267,16 +2940,80 @@ class Vista3DWidget(QWidget):
     def wheelEvent(self, event):
         delta = event.angleDelta().y()
         if delta > 0:
-            self.scala = min(60, self.scala * 1.1)
+            self.scala = min(80, self.scala * 1.1)
         else:
-            self.scala = max(10, self.scala / 1.1)
+            self.scala = max(5, self.scala / 1.1)
         self.update()
 
     def mousePressEvent(self, event):
-        # Ruota vista con click
+        self.last_mouse_pos = event.pos()
         if event.button() == Qt.LeftButton:
-            self.rotazione = (self.rotazione + 15) % 360
+            self.dragging = True
+            self.setCursor(Qt.ClosedHandCursor)
+        elif event.button() == Qt.MiddleButton:
+            self.panning = True
+            self.setCursor(Qt.SizeAllCursor)
+
+    def mouseMoveEvent(self, event):
+        if self.last_mouse_pos is None:
+            return
+
+        delta = event.pos() - self.last_mouse_pos
+
+        if self.dragging:
+            # Rotazione con drag sinistro
+            self.rotazione_h = (self.rotazione_h + delta.x() * 0.5) % 360
+            if self.prospettiva:
+                self.rotazione_v = max(-80, min(80, self.rotazione_v - delta.y() * 0.5))
             self.update()
+
+        elif self.panning:
+            # Pan con middle button
+            self.offset_x += delta.x()
+            self.offset_y += delta.y()
+            self.update()
+
+        self.last_mouse_pos = event.pos()
+
+    def mouseReleaseEvent(self, event):
+        self.dragging = False
+        self.panning = False
+        self.last_mouse_pos = None
+        self.setCursor(Qt.ArrowCursor)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key_P:
+            # Toggle prospettiva/isometrica
+            self.prospettiva = not self.prospettiva
+            self.update()
+        elif key == Qt.Key_R:
+            # Reset vista
+            self.rotazione_h = 30
+            self.rotazione_v = 30
+            self.scala = 25
+            self.offset_x = 200
+            self.offset_y = 350
+            self.update()
+        elif key == Qt.Key_Home:
+            # Vista frontale
+            self.rotazione_h = 0
+            self.rotazione_v = 0
+            self.update()
+        elif key == Qt.Key_Plus or key == Qt.Key_Equal:
+            self.scala = min(80, self.scala * 1.2)
+            self.update()
+        elif key == Qt.Key_Minus:
+            self.scala = max(5, self.scala / 1.2)
+            self.update()
+
+    def focusInEvent(self, event):
+        # Permette alla widget di ricevere eventi tastiera
+        super().focusInEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        # Focus per abilitare tastiera
+        self.setFocus()
 
 
 # ============================================================================
@@ -2854,12 +3591,14 @@ class DrawingCanvas(QWidget):
 
     muroAggiunto = pyqtSignal(Muro)
     selectionChanged = pyqtSignal(object)
+    muriChanged = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.progetto: Optional[Progetto] = None
         self.setMinimumSize(600, 400)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)  # Per ricevere eventi tastiera
 
         # Vista
         self.scala = 40  # pixel per metro
@@ -2869,7 +3608,7 @@ class DrawingCanvas(QWidget):
         self.passo_griglia = 0.5
 
         # Strumento corrente
-        # Strumenti: select, muro, apertura, pan, rettangolo, misura, copia
+        # Strumenti: select, muro, apertura, pan, rettangolo, misura, copia, polygon, ruota
         self.strumento = 'select'
 
         # Disegno muro/rettangolo
@@ -2878,6 +3617,9 @@ class DrawingCanvas(QWidget):
 
         # Strumento rettangolo
         self.rettangolo_punti = []  # [p1, p2] per disegnare 4 muri
+
+        # Strumento poligono
+        self.polygon_vertices = []
 
         # Strumento misura
         self.misura_attiva = False
@@ -2892,8 +3634,29 @@ class DrawingCanvas(QWidget):
         # Piano corrente
         self.piano_corrente = 0
 
+        # Multi-selezione
+        self.multi_select_mode = False
+        self.selection_rect_start = None
+        self.selection_rect_end = None
+
+        # Immagine di riferimento
+        self.reference_image = None
+        self.reference_image_pos = (0, 0)
+        self.reference_image_scale = 1.0
+        self.reference_image_opacity = 0.5
+        self.show_reference = True
+
+        # Pan con middle mouse
+        self.panning = False
+        self.pan_start = None
+
+        # Undo stack (opzionale, passato dal parent)
+        self.undo_stack = None
+
         # Stile
         self.setStyleSheet("background-color: white;")
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.showContextMenu)
 
     def setProgetto(self, progetto: Progetto):
         self.progetto = progetto
@@ -2927,6 +3690,9 @@ class DrawingCanvas(QWidget):
         # Sfondo
         painter.fillRect(self.rect(), QColor(255, 255, 255))
 
+        # Immagine di riferimento (sotto tutto)
+        self.drawReferenceImage(painter)
+
         # Griglia
         if self.griglia:
             self.drawGrid(painter)
@@ -2953,6 +3719,10 @@ class DrawingCanvas(QWidget):
         # Rettangolo in corso di disegno
         if self.strumento == 'rettangolo' and self.punto_inizio and self.punto_corrente:
             self.drawTempRettangolo(painter)
+
+        # Poligono in corso di disegno
+        if self.strumento == 'polygon':
+            self.drawTempPolygon(painter)
 
         # Linea di misura
         if self.strumento == 'misura' and (self.misura_start or self.misura_attiva):
@@ -3132,9 +3902,19 @@ class DrawingCanvas(QWidget):
             painter.drawText(10, self.height() - 10, istruzioni[self.strumento])
 
     def mousePressEvent(self, event):
+        # Pan con middle mouse button
+        if event.button() == Qt.MiddleButton:
+            self.panning = True
+            self.pan_start = (event.x(), event.y())
+            self.setCursor(Qt.ClosedHandCursor)
+            return
+
         if event.button() == Qt.LeftButton:
             wx, wy = self.screenToWorld(event.x(), event.y())
             wx, wy = self.snapToGrid(wx, wy)
+
+            # Multi-selezione con Ctrl
+            ctrl_pressed = event.modifiers() == Qt.ControlModifier
 
             if self.strumento == 'muro':
                 if not self.punto_inizio:
@@ -3157,6 +3937,10 @@ class DrawingCanvas(QWidget):
                     self.punto_inizio = None
                     self.punto_corrente = None
 
+            elif self.strumento == 'polygon':
+                # Aggiungi vertice al poligono
+                self.handlePolygonClick(wx, wy)
+
             elif self.strumento == 'misura':
                 if not self.misura_attiva:
                     self.startMisura(wx, wy)
@@ -3164,12 +3948,13 @@ class DrawingCanvas(QWidget):
                     self.endMisura()
 
             elif self.strumento == 'select':
-                self.selectAt(wx, wy)
+                self.selectAt(wx, wy, multi=ctrl_pressed)
 
         elif event.button() == Qt.RightButton:
             # Annulla operazione corrente
             self.punto_inizio = None
             self.punto_corrente = None
+            self.polygon_vertices = []
             if self.misura_attiva:
                 self.endMisura()
                 self.misura_start = None
@@ -3177,11 +3962,35 @@ class DrawingCanvas(QWidget):
 
         self.update()
 
+    def mouseDoubleClickEvent(self, event):
+        """Gestisce doppio click - chiude poligono"""
+        if event.button() == Qt.LeftButton:
+            if self.strumento == 'polygon' and len(self.polygon_vertices) >= 3:
+                self.closePolygon()
+        super().mouseDoubleClickEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Gestisce rilascio mouse"""
+        if event.button() == Qt.MiddleButton:
+            self.panning = False
+            self.setCursor(Qt.ArrowCursor)
+        super().mouseReleaseEvent(event)
+
     def mouseMoveEvent(self, event):
         wx, wy = self.screenToWorld(event.x(), event.y())
         wx, wy = self.snapToGrid(wx, wy)
 
-        if self.strumento in ['muro', 'rettangolo'] and self.punto_inizio:
+        # Pan con middle mouse
+        if self.panning and self.pan_start:
+            dx = event.x() - self.pan_start[0]
+            dy = event.y() - self.pan_start[1]
+            self.offset_x += dx
+            self.offset_y += dy
+            self.pan_start = (event.x(), event.y())
+            self.update()
+            return
+
+        if self.strumento in ['muro', 'rettangolo', 'polygon'] and (self.punto_inizio or self.polygon_vertices):
             self.punto_corrente = (wx, wy)
 
         if self.strumento == 'misura' and self.misura_attiva:
@@ -3217,20 +4026,21 @@ class DrawingCanvas(QWidget):
         self.progetto.muri.append(muro)
         self.muroAggiunto.emit(muro)
 
-    def selectAt(self, wx: float, wy: float):
+    def selectAt(self, wx: float, wy: float, multi: bool = False):
         if not self.progetto:
             return
 
-        # Deseleziona tutti
-        for m in self.progetto.muri:
-            m.selected = False
+        # Deseleziona tutti se non multi-selezione
+        if not multi:
+            for m in self.progetto.muri:
+                m.selected = False
 
         # Cerca muro vicino
         for muro in self.progetto.muri:
             # Distanza punto-segmento
             dist = self.pointToSegmentDist(wx, wy, muro.x1, muro.y1, muro.x2, muro.y2)
             if dist < 0.5:  # 50cm di tolleranza
-                muro.selected = True
+                muro.selected = not muro.selected if multi else True
                 self.selectionChanged.emit(muro)
                 break
 
@@ -3429,6 +4239,323 @@ class DrawingCanvas(QWidget):
         self.progetto.muri.append(nuovo)
         self.muroAggiunto.emit(nuovo)
         return nuovo
+
+    # ========== STRUMENTO POLIGONO ==========
+
+    def handlePolygonClick(self, wx: float, wy: float):
+        """Gestisce click per strumento poligono"""
+        self.polygon_vertices.append((wx, wy))
+        self.update()
+
+    def closePolygon(self):
+        """Chiude il poligono e crea i muri"""
+        if not self.progetto or len(self.polygon_vertices) < 3:
+            self.polygon_vertices = []
+            return
+
+        n = len(self.progetto.muri)
+        z = self.piano_corrente * self.progetto.altezza_piano
+        h = self.progetto.altezza_piano
+
+        # Crea muri collegando i vertici
+        for i in range(len(self.polygon_vertices)):
+            p1 = self.polygon_vertices[i]
+            p2 = self.polygon_vertices[(i + 1) % len(self.polygon_vertices)]
+            n += 1
+            muro = Muro(
+                nome=f"M{n}",
+                x1=p1[0], y1=p1[1],
+                x2=p2[0], y2=p2[1],
+                spessore=0.30, altezza=h, z=z
+            )
+            self.progetto.muri.append(muro)
+            self.muroAggiunto.emit(muro)
+
+        self.polygon_vertices = []
+        self.update()
+
+    def drawTempPolygon(self, painter):
+        """Disegna preview del poligono in costruzione"""
+        if len(self.polygon_vertices) < 1:
+            return
+
+        painter.setPen(QPen(QColor(128, 0, 128), 2, Qt.DashLine))
+        painter.setBrush(QBrush(QColor(200, 150, 200, 50)))
+
+        # Disegna linee tra vertici
+        points = []
+        for v in self.polygon_vertices:
+            sx, sy = self.worldToScreen(v[0], v[1])
+            points.append(QPointF(sx, sy))
+
+        # Aggiungi punto corrente se presente
+        if self.punto_corrente:
+            sx, sy = self.worldToScreen(self.punto_corrente[0], self.punto_corrente[1])
+            points.append(QPointF(sx, sy))
+
+        if len(points) >= 2:
+            path = QPainterPath()
+            path.moveTo(points[0])
+            for p in points[1:]:
+                path.lineTo(p)
+            painter.drawPath(path)
+
+        # Disegna vertici
+        painter.setBrush(QBrush(QColor(128, 0, 128)))
+        for p in points[:-1]:  # Escludi punto corrente
+            painter.drawEllipse(p, 5, 5)
+
+        # Info
+        painter.setPen(QPen(QColor(100, 0, 100)))
+        painter.drawText(10, 80, f"Vertici: {len(self.polygon_vertices)} (Doppio-click o Enter per chiudere)")
+
+    # ========== MENU CONTESTUALE ==========
+
+    def showContextMenu(self, pos):
+        """Mostra menu contestuale"""
+        menu = QMenu(self)
+
+        # Azioni comuni
+        action_select_all = menu.addAction("Seleziona tutto")
+        action_select_all.triggered.connect(self.selectAll)
+
+        action_deselect = menu.addAction("Deseleziona")
+        action_deselect.triggered.connect(self.deselectAll)
+
+        menu.addSeparator()
+
+        # Se c'è selezione
+        selected = [m for m in self.progetto.muri if m.selected] if self.progetto else []
+        if selected:
+            action_delete = menu.addAction(f"Elimina ({len(selected)})")
+            action_delete.triggered.connect(self.deleteSelected)
+
+            action_copy = menu.addAction("Copia")
+            action_copy.triggered.connect(self.copiaSelezionati)
+
+            menu.addSeparator()
+
+            action_rotate = menu.addAction("Ruota...")
+            action_rotate.triggered.connect(self.showRotateDialog)
+
+            action_mirror_x = menu.addAction("Specchia X")
+            action_mirror_x.triggered.connect(lambda: self.specchiaMuri('x', 0))
+
+            action_mirror_y = menu.addAction("Specchia Y")
+            action_mirror_y.triggered.connect(lambda: self.specchiaMuri('y', 0))
+
+        # Incolla se clipboard ha contenuto
+        if self.clipboard_muri:
+            menu.addSeparator()
+            action_paste = menu.addAction(f"Incolla ({len(self.clipboard_muri)})")
+            action_paste.triggered.connect(lambda: self.incollaCliboard())
+
+        menu.addSeparator()
+
+        # Vista
+        action_fit = menu.addAction("Adatta alla vista")
+        action_fit.triggered.connect(self.fitToView)
+
+        action_grid = menu.addAction("Mostra/Nascondi griglia")
+        action_grid.triggered.connect(self.toggleGrid)
+
+        menu.exec_(self.mapToGlobal(pos))
+
+    def selectAll(self):
+        """Seleziona tutti i muri"""
+        if self.progetto:
+            for m in self.progetto.muri:
+                m.selected = True
+            self.update()
+
+    def deselectAll(self):
+        """Deseleziona tutti i muri"""
+        if self.progetto:
+            for m in self.progetto.muri:
+                m.selected = False
+            self.selectionChanged.emit(None)
+            self.update()
+
+    def deleteSelected(self):
+        """Elimina muri selezionati"""
+        if not self.progetto:
+            return
+        self.progetto.muri = [m for m in self.progetto.muri if not m.selected]
+        self.muriChanged.emit()
+        self.update()
+
+    def toggleGrid(self):
+        """Toggle visualizzazione griglia"""
+        self.griglia = not self.griglia
+        self.update()
+
+    def fitToView(self):
+        """Adatta la vista per mostrare tutti i muri"""
+        if not self.progetto or not self.progetto.muri:
+            return
+
+        # Trova bounding box
+        min_x = min(min(m.x1, m.x2) for m in self.progetto.muri)
+        max_x = max(max(m.x1, m.x2) for m in self.progetto.muri)
+        min_y = min(min(m.y1, m.y2) for m in self.progetto.muri)
+        max_y = max(max(m.y1, m.y2) for m in self.progetto.muri)
+
+        # Calcola scala e offset
+        width = max_x - min_x + 2
+        height = max_y - min_y + 2
+
+        scale_x = self.width() / width if width > 0 else 40
+        scale_y = self.height() / height if height > 0 else 40
+        self.scala = min(scale_x, scale_y) * 0.8
+
+        center_x = (min_x + max_x) / 2
+        center_y = (min_y + max_y) / 2
+        self.offset_x = self.width() / 2 - center_x * self.scala
+        self.offset_y = self.height() / 2 + center_y * self.scala
+
+        self.update()
+
+    # ========== ROTAZIONE ==========
+
+    def showRotateDialog(self):
+        """Mostra dialogo per rotazione"""
+        selected = [m for m in self.progetto.muri if m.selected] if self.progetto else []
+        if not selected:
+            return
+
+        angolo, ok = QInputDialog.getDouble(
+            self, "Ruota", "Angolo (gradi):",
+            value=45.0, min=-360.0, max=360.0, decimals=1
+        )
+        if ok:
+            self.rotateMuri(angolo)
+
+    def rotateMuri(self, angolo: float):
+        """Ruota muri selezionati attorno al loro centro"""
+        if not self.progetto:
+            return
+
+        selected = [m for m in self.progetto.muri if m.selected]
+        if not selected:
+            return
+
+        # Calcola centro della selezione
+        all_x = []
+        all_y = []
+        for m in selected:
+            all_x.extend([m.x1, m.x2])
+            all_y.extend([m.y1, m.y2])
+
+        centro_x = sum(all_x) / len(all_x)
+        centro_y = sum(all_y) / len(all_y)
+
+        # Ruota
+        rad = math.radians(angolo)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+
+        for muro in selected:
+            # Ruota punto 1
+            dx1 = muro.x1 - centro_x
+            dy1 = muro.y1 - centro_y
+            muro.x1 = centro_x + dx1 * cos_a - dy1 * sin_a
+            muro.y1 = centro_y + dx1 * sin_a + dy1 * cos_a
+            # Ruota punto 2
+            dx2 = muro.x2 - centro_x
+            dy2 = muro.y2 - centro_y
+            muro.x2 = centro_x + dx2 * cos_a - dy2 * sin_a
+            muro.y2 = centro_y + dx2 * sin_a + dy2 * cos_a
+
+        self.muriChanged.emit()
+        self.update()
+
+    # ========== IMMAGINE DI RIFERIMENTO ==========
+
+    def loadReferenceImage(self, filepath: str):
+        """Carica un'immagine di riferimento (planimetria)"""
+        if not PIL_AVAILABLE:
+            QMessageBox.warning(self, "Errore", "Pillow non installato. Esegui: pip install Pillow")
+            return False
+
+        try:
+            img = PILImage.open(filepath)
+            img = img.convert("RGBA")
+
+            # Converti a QImage
+            data = img.tobytes("raw", "RGBA")
+            qimg = QImage(data, img.width, img.height, QImage.Format_RGBA8888)
+            self.reference_image = QPixmap.fromImage(qimg)
+
+            self.update()
+            return True
+        except Exception as e:
+            QMessageBox.warning(self, "Errore", f"Impossibile caricare immagine: {e}")
+            return False
+
+    def setReferenceImageScale(self, scale: float):
+        """Imposta la scala dell'immagine di riferimento (pixel per metro)"""
+        self.reference_image_scale = scale
+        self.update()
+
+    def setReferenceImageOpacity(self, opacity: float):
+        """Imposta opacità immagine (0-1)"""
+        self.reference_image_opacity = max(0, min(1, opacity))
+        self.update()
+
+    def drawReferenceImage(self, painter):
+        """Disegna immagine di riferimento"""
+        if not self.reference_image or not self.show_reference:
+            return
+
+        painter.setOpacity(self.reference_image_opacity)
+
+        # Calcola posizione e dimensione
+        sx, sy = self.worldToScreen(self.reference_image_pos[0], self.reference_image_pos[1])
+        scaled_w = int(self.reference_image.width() * self.scala / self.reference_image_scale)
+        scaled_h = int(self.reference_image.height() * self.scala / self.reference_image_scale)
+
+        scaled_pixmap = self.reference_image.scaled(scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter.drawPixmap(sx, sy - scaled_h, scaled_pixmap)
+
+        painter.setOpacity(1.0)
+
+    # ========== KEYBOARD EVENTS ==========
+
+    def keyPressEvent(self, event):
+        """Gestisce eventi tastiera"""
+        if event.key() == Qt.Key_Escape:
+            # Annulla operazione corrente
+            self.punto_inizio = None
+            self.punto_corrente = None
+            self.polygon_vertices = []
+            self.misura_attiva = False
+            self.update()
+
+        elif event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            # Chiudi poligono
+            if self.strumento == 'polygon' and len(self.polygon_vertices) >= 3:
+                self.closePolygon()
+
+        elif event.key() == Qt.Key_Delete:
+            # Elimina selezione
+            self.deleteSelected()
+
+        elif event.modifiers() == Qt.ControlModifier:
+            if event.key() == Qt.Key_A:
+                self.selectAll()
+            elif event.key() == Qt.Key_C:
+                self.copiaSelezionati()
+            elif event.key() == Qt.Key_V:
+                self.incollaCliboard()
+            elif event.key() == Qt.Key_Z:
+                if self.undo_stack:
+                    self.undo_stack.undo()
+                    self.update()
+            elif event.key() == Qt.Key_Y:
+                if self.undo_stack:
+                    self.undo_stack.redo()
+                    self.update()
+
+        super().keyPressEvent(event)
 
 
 # ============================================================================
@@ -3965,6 +5092,16 @@ class MuraturaEditorV2(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.properties)
         self.properties.hide()
 
+        # Layer Manager (dock destra)
+        self.layer_manager = LayerManager(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.layer_manager)
+        self.layer_manager.layerVisibilityChanged.connect(self.onLayerVisibilityChanged)
+        self.layer_manager.hide()
+
+        # Undo Stack
+        self.undo_stack = QUndoStack(self)
+        self.canvas.undo_stack = self.undo_stack
+
         # Status bar
         self.status_label = QLabel("Pronto")
         self.statusBar().addWidget(self.status_label)
@@ -4008,6 +5145,11 @@ class MuraturaEditorV2(QMainWindow):
         self.btn_apertura = RibbonButton("Apertura")
         self.btn_apertura.clicked.connect(self.aggiungiApertura)
         tools_panel.addButton(self.btn_apertura)
+        self.btn_polygon = RibbonButton("Poligono")
+        self.btn_polygon.setCheckable(True)
+        self.btn_polygon.setToolTip("Disegna poligono di muri (doppio-click o Enter per chiudere)")
+        self.btn_polygon.clicked.connect(lambda: self.canvas.setStrumento('polygon'))
+        tools_panel.addButton(self.btn_polygon)
         home_tab.addPanel(tools_panel)
 
         # Pannello strumenti avanzati
@@ -4033,7 +5175,27 @@ class MuraturaEditorV2(QMainWindow):
         btn_offset.setToolTip("Crea muro parallelo")
         btn_offset.clicked.connect(self.offsetMuro)
         adv_panel.addButton(btn_offset)
+        btn_ruota = RibbonButton("Ruota")
+        btn_ruota.setToolTip("Ruota elementi selezionati")
+        btn_ruota.clicked.connect(self.ruotaMuri)
+        adv_panel.addButton(btn_ruota)
         home_tab.addPanel(adv_panel)
+
+        # Pannello Export/Import
+        export_panel = RibbonPanel("Export")
+        btn_dxf = RibbonButton("DXF")
+        btn_dxf.setToolTip("Esporta in formato DXF (AutoCAD)")
+        btn_dxf.clicked.connect(self.esportaDXF)
+        export_panel.addButton(btn_dxf)
+        btn_pdf = RibbonButton("PDF")
+        btn_pdf.setToolTip("Esporta report in PDF")
+        btn_pdf.clicked.connect(self.esportaPDF)
+        export_panel.addButton(btn_pdf)
+        btn_img = RibbonButton("Immagine")
+        btn_img.setToolTip("Importa immagine di riferimento")
+        btn_img.clicked.connect(self.importaImmagine)
+        export_panel.addButton(btn_img)
+        home_tab.addPanel(export_panel)
 
         self.ribbon.addTab(home_tab, "Home")
 
@@ -4076,6 +5238,59 @@ class MuraturaEditorV2(QMainWindow):
         analisi_tab.addPanel(spettro_panel)
 
         self.ribbon.addTab(analisi_tab, "Analisi")
+
+        # Tab VISTA
+        vista_tab = RibbonTab()
+
+        pannelli_panel = RibbonPanel("Pannelli")
+        btn_browser = RibbonButton("Browser\nProgetto")
+        btn_browser.setCheckable(True)
+        btn_browser.clicked.connect(self.toggleBrowser)
+        pannelli_panel.addButton(btn_browser)
+        btn_props = RibbonButton("Proprietà")
+        btn_props.setCheckable(True)
+        btn_props.clicked.connect(self.toggleProperties)
+        pannelli_panel.addButton(btn_props)
+        btn_layers = RibbonButton("Layer")
+        btn_layers.setCheckable(True)
+        btn_layers.clicked.connect(self.toggleLayers)
+        pannelli_panel.addButton(btn_layers)
+        vista_tab.addPanel(pannelli_panel)
+
+        aspetto_panel = RibbonPanel("Aspetto")
+        self.btn_tema = RibbonButton("Tema\nScuro")
+        self.btn_tema.setCheckable(True)
+        self.btn_tema.setToolTip("Cambia tema chiaro/scuro (Ctrl+T)")
+        self.btn_tema.clicked.connect(self.toggleTema)
+        aspetto_panel.addButton(self.btn_tema)
+        btn_griglia = RibbonButton("Griglia")
+        btn_griglia.setCheckable(True)
+        btn_griglia.setChecked(True)
+        btn_griglia.setToolTip("Mostra/nascondi griglia")
+        btn_griglia.clicked.connect(self.toggleGriglia)
+        aspetto_panel.addButton(btn_griglia)
+        btn_quote = RibbonButton("Quote")
+        btn_quote.setCheckable(True)
+        btn_quote.setChecked(True)
+        btn_quote.setToolTip("Mostra/nascondi quote automatiche")
+        btn_quote.clicked.connect(self.toggleQuote)
+        aspetto_panel.addButton(btn_quote)
+        vista_tab.addPanel(aspetto_panel)
+
+        zoom_panel = RibbonPanel("Zoom")
+        btn_fit = RibbonButton("Adatta")
+        btn_fit.setToolTip("Adatta vista a tutti gli elementi (Home)")
+        btn_fit.clicked.connect(self.zoomFit)
+        zoom_panel.addButton(btn_fit)
+        btn_zoom_in = RibbonButton("Zoom +")
+        btn_zoom_in.clicked.connect(self.zoomIn)
+        zoom_panel.addButton(btn_zoom_in)
+        btn_zoom_out = RibbonButton("Zoom -")
+        btn_zoom_out.clicked.connect(self.zoomOut)
+        zoom_panel.addButton(btn_zoom_out)
+        vista_tab.addPanel(zoom_panel)
+
+        self.ribbon.addTab(vista_tab, "Vista")
 
         # Aggiungi ribbon al layout
         # Il ribbon è separato dalla barra menu
@@ -4625,6 +5840,356 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
         layout.addWidget(btn)
 
         dlg.exec_()
+
+    # ========== NUOVE FUNZIONI ==========
+
+    def onLayerVisibilityChanged(self, layer_name: str, visible: bool):
+        """Gestisce cambio visibilità layer"""
+        self.canvas.update()
+        self.status_label.setText(f"Layer '{layer_name}': {'visibile' if visible else 'nascosto'}")
+
+    def ruotaMuri(self):
+        """Ruota muri selezionati"""
+        self.canvas.showRotateDialog()
+
+    def esportaDXF(self):
+        """Esporta progetto in formato DXF"""
+        if not DXF_AVAILABLE:
+            QMessageBox.warning(self, "Errore",
+                "Libreria ezdxf non disponibile.\nInstalla con: pip install ezdxf")
+            return
+
+        if not self.progetto.muri:
+            QMessageBox.warning(self, "Attenzione", "Nessun muro da esportare")
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Esporta DXF", f"{self.progetto.nome}.dxf",
+            "DXF Files (*.dxf)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            doc = ezdxf.new('R2018')
+            msp = doc.modelspace()
+
+            # Crea layer
+            doc.layers.add('MURI', color=5)  # Blu
+            doc.layers.add('APERTURE', color=1)  # Rosso
+            doc.layers.add('FONDAZIONI', color=8)  # Grigio
+            doc.layers.add('QUOTE', color=7)  # Nero
+
+            # Esporta muri come polilinee
+            for muro in self.progetto.muri:
+                # Calcola i 4 punti del muro
+                dx = muro.x2 - muro.x1
+                dy = muro.y2 - muro.y1
+                length = math.sqrt(dx*dx + dy*dy)
+                if length > 0:
+                    nx = -dy / length * muro.spessore / 2
+                    ny = dx / length * muro.spessore / 2
+
+                    points = [
+                        (muro.x1 - nx, muro.y1 - ny),
+                        (muro.x1 + nx, muro.y1 + ny),
+                        (muro.x2 + nx, muro.y2 + ny),
+                        (muro.x2 - nx, muro.y2 - ny),
+                        (muro.x1 - nx, muro.y1 - ny)  # Chiudi
+                    ]
+                    msp.add_lwpolyline(points, dxfattribs={'layer': 'MURI'})
+
+                    # Aggiungi testo con nome muro
+                    cx = (muro.x1 + muro.x2) / 2
+                    cy = (muro.y1 + muro.y2) / 2
+                    msp.add_text(muro.nome, dxfattribs={
+                        'layer': 'QUOTE',
+                        'height': 0.15
+                    }).set_placement((cx, cy))
+
+            # Esporta aperture come rettangoli
+            for ap in self.progetto.aperture:
+                muro = next((m for m in self.progetto.muri if m.nome == ap.muro), None)
+                if muro:
+                    # Calcola posizione apertura
+                    dx = muro.x2 - muro.x1
+                    dy = muro.y2 - muro.y1
+                    length = math.sqrt(dx*dx + dy*dy)
+                    if length > 0:
+                        t = (ap.posizione + ap.larghezza/2) / length
+                        ax = muro.x1 + dx * t
+                        ay = muro.y1 + dy * t
+                        msp.add_circle((ax, ay), radius=ap.larghezza/2,
+                                      dxfattribs={'layer': 'APERTURE'})
+
+            # Esporta fondazioni
+            for fond in self.progetto.fondazioni:
+                points = [
+                    (fond.x1, fond.y1),
+                    (fond.x2, fond.y2)
+                ]
+                msp.add_line(points[0], points[1], dxfattribs={'layer': 'FONDAZIONI'})
+
+            doc.saveas(filepath)
+            self.status_label.setText(f"Esportato: {filepath}")
+            QMessageBox.information(self, "Esportazione DXF",
+                f"File esportato con successo:\n{filepath}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Errore", f"Errore durante l'esportazione:\n{e}")
+
+    def esportaPDF(self):
+        """Esporta report in PDF"""
+        if not PDF_AVAILABLE:
+            # Fallback: usa esportaReport che genera HTML
+            self.esportaReport()
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Esporta PDF", f"{self.progetto.nome}_report.pdf",
+            "PDF Files (*.pdf)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            doc = SimpleDocTemplate(filepath, pagesize=A4,
+                                   leftMargin=2*cm, rightMargin=2*cm,
+                                   topMargin=2*cm, bottomMargin=2*cm)
+
+            styles = getSampleStyleSheet()
+            story = []
+
+            # Titolo
+            title_style = ParagraphStyle(
+                'Title',
+                parent=styles['Title'],
+                fontSize=18,
+                spaceAfter=30
+            )
+            story.append(Paragraph(f"RELAZIONE DI CALCOLO - {self.progetto.nome}", title_style))
+            story.append(Spacer(1, 20))
+
+            # Dati generali
+            story.append(Paragraph("1. DATI GENERALI", styles['Heading2']))
+            data_gen = [
+                ["Progetto:", self.progetto.nome],
+                ["Autore:", self.progetto.autore or "-"],
+                ["N. Piani:", str(self.progetto.n_piani)],
+                ["Altezza piano:", f"{self.progetto.altezza_piano:.2f} m"],
+                ["N. Muri:", str(len(self.progetto.muri))],
+                ["N. Aperture:", str(len(self.progetto.aperture))]
+            ]
+            t = Table(data_gen, colWidths=[5*cm, 10*cm])
+            t.setStyle([
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ])
+            story.append(t)
+            story.append(Spacer(1, 20))
+
+            # Parametri sismici
+            story.append(Paragraph("2. PARAMETRI SISMICI", styles['Heading2']))
+            sismici = self.progetto.sismici
+            data_sism = [
+                ["Comune:", sismici.comune or "-"],
+                ["Sottosuolo:", sismici.sottosuolo],
+                ["Topografia:", sismici.topografia],
+                ["Vita nominale:", f"{sismici.vita_nominale} anni"],
+                ["Classe d'uso:", str(sismici.classe_uso)],
+                ["Fattore q:", f"{sismici.fattore_struttura:.2f}"],
+                ["ag(SLV):", f"{sismici.ag_slv:.3f} g" if sismici.ag_slv else "-"]
+            ]
+            t = Table(data_sism, colWidths=[5*cm, 10*cm])
+            t.setStyle([
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+            ])
+            story.append(t)
+            story.append(Spacer(1, 20))
+
+            # Tabella muri
+            story.append(Paragraph("3. GEOMETRIA MURI", styles['Heading2']))
+            header = ["Nome", "Lunghezza", "Spessore", "Altezza", "DCR", "Verifica"]
+            data_muri = [header]
+            for m in self.progetto.muri:
+                verifica = "OK" if m.dcr <= 1.0 or m.dcr == 0 else "NO"
+                data_muri.append([
+                    m.nome,
+                    f"{m.lunghezza:.2f} m",
+                    f"{m.spessore:.2f} m",
+                    f"{m.altezza:.2f} m",
+                    f"{m.dcr:.3f}" if m.dcr > 0 else "-",
+                    verifica
+                ])
+
+            t = Table(data_muri, colWidths=[2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2*cm, 2*cm])
+            t.setStyle([
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
+            ])
+            story.append(t)
+            story.append(Spacer(1, 20))
+
+            # Risultati analisi
+            story.append(Paragraph("4. RISULTATI ANALISI", styles['Heading2']))
+            ir = self.progetto.indice_rischio
+            classe = VerificheNTC2018.calcola_classe_rischio(ir)
+            data_ris = [
+                ["Indice di Rischio (IR):", f"{ir:.3f}"],
+                ["Classe Rischio Sismico:", classe['classe']],
+                ["Descrizione:", classe['descrizione']],
+                ["Verifica globale:", "VERIFICATO" if ir >= 1.0 else "NON VERIFICATO"]
+            ]
+            t = Table(data_ris, colWidths=[5*cm, 10*cm])
+            t.setStyle([
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+            ])
+            story.append(t)
+
+            # Build PDF
+            doc.build(story)
+            self.status_label.setText(f"PDF esportato: {filepath}")
+            QMessageBox.information(self, "Esportazione PDF",
+                f"Report PDF generato:\n{filepath}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Errore", f"Errore generazione PDF:\n{e}")
+
+    def importaImmagine(self):
+        """Importa immagine di riferimento"""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Importa Immagine di Riferimento", "",
+            "Immagini (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
+        )
+
+        if filepath:
+            if self.canvas.loadReferenceImage(filepath):
+                # Chiedi la scala
+                scala, ok = QInputDialog.getDouble(
+                    self, "Scala Immagine",
+                    "Pixel per metro nell'immagine:",
+                    value=100.0, min=1.0, max=1000.0, decimals=1
+                )
+                if ok:
+                    self.canvas.setReferenceImageScale(scala)
+
+                # Chiedi opacità
+                opacita, ok = QInputDialog.getDouble(
+                    self, "Opacità Immagine",
+                    "Opacità (0-1):",
+                    value=0.5, min=0.0, max=1.0, decimals=2
+                )
+                if ok:
+                    self.canvas.setReferenceImageOpacity(opacita)
+
+                self.status_label.setText(f"Immagine caricata: {filepath}")
+
+    # ========================================================================
+    # METODI VISTA E TEMA
+    # ========================================================================
+
+    def toggleTema(self):
+        """Cambia tema chiaro/scuro"""
+        new_theme = ThemeManager.toggle_theme()
+        self.applyTheme()
+        # Aggiorna testo pulsante
+        if new_theme == 'dark':
+            self.btn_tema.setText("Tema\nChiaro")
+        else:
+            self.btn_tema.setText("Tema\nScuro")
+        self.status_label.setText(f"Tema: {ThemeManager.THEMES[new_theme]['name']}")
+
+    def applyTheme(self):
+        """Applica il tema corrente all'applicazione"""
+        QApplication.instance().setStyleSheet(ThemeManager.get_stylesheet())
+        # Aggiorna canvas
+        if hasattr(self, 'canvas'):
+            self.canvas.update()
+        # Aggiorna vista 3D
+        if hasattr(self, 'vista_3d'):
+            self.vista_3d.update()
+
+    def toggleBrowser(self):
+        """Mostra/nascondi browser progetto"""
+        if self.browser.isVisible():
+            self.browser.hide()
+        else:
+            self.browser.show()
+
+    def toggleProperties(self):
+        """Mostra/nascondi pannello proprietà"""
+        if self.properties.isVisible():
+            self.properties.hide()
+        else:
+            self.properties.show()
+
+    def toggleLayers(self):
+        """Mostra/nascondi layer manager"""
+        if self.layer_manager.isVisible():
+            self.layer_manager.hide()
+        else:
+            self.layer_manager.show()
+
+    def toggleGriglia(self):
+        """Mostra/nascondi griglia"""
+        if hasattr(self.canvas, 'mostra_griglia'):
+            self.canvas.mostra_griglia = not self.canvas.mostra_griglia
+        else:
+            self.canvas.mostra_griglia = False
+        self.canvas.update()
+
+    def toggleQuote(self):
+        """Mostra/nascondi quote automatiche"""
+        if hasattr(self.canvas, 'mostra_quote'):
+            self.canvas.mostra_quote = not self.canvas.mostra_quote
+        else:
+            self.canvas.mostra_quote = False
+        self.canvas.update()
+
+    def zoomFit(self):
+        """Adatta zoom a tutti gli elementi"""
+        if not self.progetto.muri:
+            return
+
+        # Trova bounding box
+        min_x = min(min(m.x1, m.x2) for m in self.progetto.muri)
+        max_x = max(max(m.x1, m.x2) for m in self.progetto.muri)
+        min_y = min(min(m.y1, m.y2) for m in self.progetto.muri)
+        max_y = max(max(m.y1, m.y2) for m in self.progetto.muri)
+
+        # Calcola scala ottimale
+        dx = max_x - min_x + 2
+        dy = max_y - min_y + 2
+        scale_x = (self.canvas.width() - 100) / dx if dx > 0 else 50
+        scale_y = (self.canvas.height() - 100) / dy if dy > 0 else 50
+        self.canvas.scala = min(scale_x, scale_y, 80)
+
+        # Centra
+        cx = (min_x + max_x) / 2
+        cy = (min_y + max_y) / 2
+        self.canvas.offset_x = self.canvas.width() / 2 - cx * self.canvas.scala
+        self.canvas.offset_y = self.canvas.height() / 2 + cy * self.canvas.scala
+
+        self.canvas.update()
+        self.status_label.setText("Vista adattata")
+
+    def zoomIn(self):
+        """Zoom avanti"""
+        self.canvas.scala = min(80, self.canvas.scala * 1.25)
+        self.canvas.update()
+
+    def zoomOut(self):
+        """Zoom indietro"""
+        self.canvas.scala = max(5, self.canvas.scala / 1.25)
+        self.canvas.update()
 
 
 # ============================================================================
