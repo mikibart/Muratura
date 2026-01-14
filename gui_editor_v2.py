@@ -41,7 +41,7 @@ from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QSize, QTimer, QByteAr
 from PyQt5.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QWheelEvent,
     QMouseEvent, QPainterPath, QKeyEvent, QIcon, QPixmap,
-    QKeySequence, QImage
+    QKeySequence, QImage, QLinearGradient, QRadialGradient
 )
 
 # Import librerie export
@@ -3616,6 +3616,9 @@ class Vista3DWidget(QWidget):
         if self.mostra_assi:
             self._drawAxes(painter)
 
+        # Disegna ombre a terra (prima degli elementi)
+        self._drawShadows(painter)
+
         # Fondazioni
         if self.mostra_fondazioni:
             for fond in self.progetto.fondazioni:
@@ -3766,43 +3769,45 @@ class Vista3DWidget(QWidget):
         # Proietta vertici
         pv = [self.project3D_2D(*vtx) for vtx in v]
 
-        # 6 facce del box (con colori diversi per illuminazione)
-        facce = [
-            ([0, 1, 2, 3], base_color),  # Fronte
-            ([5, 4, 7, 6], base_color.darker(110)),  # Retro
-            ([4, 0, 3, 7], base_color.darker(120)),  # Sinistra
-            ([1, 5, 6, 2], base_color.darker(105)),  # Destra
-            ([3, 2, 6, 7], base_color.lighter(110)),  # Top
-            ([4, 5, 1, 0], base_color.darker(130)),  # Bottom
-        ]
+        # Disegna TUTTE le facce con gradienti per effetto 3D migliore
+        # Bottom (sempre sotto) - scuro
+        self._drawFace(painter, [pv[4], pv[5], pv[1], pv[0]], base_color.darker(140))
 
-        # Calcola quali facce sono visibili (backface culling semplificato)
-        for indices, color in facce:
-            pts = [pv[i] for i in indices]
+        # Back faces - più scure
+        self._drawFaceGradient(painter, [pv[5], pv[4], pv[7], pv[6]],
+                              base_color.darker(120), base_color.darker(135), vertical=True)
+        self._drawFaceGradient(painter, [pv[4], pv[0], pv[3], pv[7]],
+                              base_color.darker(115), base_color.darker(130), vertical=True)
 
-            # Cross product per determinare orientamento
-            v1 = (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
-            v2 = (pts[2][0] - pts[0][0], pts[2][1] - pts[0][1])
-            cross = v1[0] * v2[1] - v1[1] * v2[0]
+        # Front faces - con gradiente verticale (più chiaro in alto)
+        self._drawFaceGradient(painter, [pv[1], pv[5], pv[6], pv[2]],
+                              base_color.darker(105), base_color.darker(115), vertical=True)
+        self._drawFaceGradient(painter, [pv[0], pv[1], pv[2], pv[3]],
+                              base_color, base_color.darker(108), vertical=True)
 
-            if cross > 0:  # Faccia visibile
-                # Bordo più definito e spesso
-                painter.setPen(QPen(QColor(60, 45, 30), 2))
-                painter.setBrush(QBrush(color))
+        # Top - chiaro con gradiente
+        self._drawFaceGradient(painter, [pv[3], pv[2], pv[6], pv[7]],
+                              base_color.lighter(115), base_color.lighter(105), vertical=False)
 
-                path = QPainterPath()
-                path.moveTo(pts[0][0], pts[0][1])
-                for pt in pts[1:]:
-                    path.lineTo(pt[0], pt[1])
-                path.closeSubpath()
-                painter.drawPath(path)
+        # Disegna spigoli scuri per definizione del volume (ambient occlusion)
+        edge_color = QColor(40, 30, 20)
+        painter.setPen(QPen(edge_color, 2))
 
-        # Disegna spigoli verticali per definizione
-        painter.setPen(QPen(QColor(50, 35, 20), 2))
-        # Spigolo frontale sinistro
+        # Spigoli verticali
         painter.drawLine(pv[0][0], pv[0][1], pv[3][0], pv[3][1])
-        # Spigolo frontale destro
         painter.drawLine(pv[1][0], pv[1][1], pv[2][0], pv[2][1])
+        painter.drawLine(pv[4][0], pv[4][1], pv[7][0], pv[7][1])
+        painter.drawLine(pv[5][0], pv[5][1], pv[6][0], pv[6][1])
+
+        # Spigoli top
+        painter.drawLine(pv[3][0], pv[3][1], pv[2][0], pv[2][1])
+        painter.drawLine(pv[2][0], pv[2][1], pv[6][0], pv[6][1])
+        painter.drawLine(pv[6][0], pv[6][1], pv[7][0], pv[7][1])
+        painter.drawLine(pv[7][0], pv[7][1], pv[3][0], pv[3][1])
+
+        # Spigoli bottom visibili
+        painter.drawLine(pv[0][0], pv[0][1], pv[1][0], pv[1][1])
+        painter.drawLine(pv[1][0], pv[1][1], pv[5][0], pv[5][1])
 
         # Disegna aperture
         if self.mostra_aperture:
@@ -3883,11 +3888,10 @@ class Vista3DWidget(QWidget):
                                int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2))
 
     def _drawFondazione3D(self, painter, fond: Fondazione):
-        """Disegna fondazione come box 3D"""
+        """Disegna fondazione come box 3D pieno"""
         z0 = -fond.profondita
         z1 = 0
 
-        # Box semplificato (senza spessore laterale per ora)
         dx = fond.x2 - fond.x1
         dy = fond.y2 - fond.y1
         length = math.sqrt(dx*dx + dy*dy)
@@ -3897,42 +3901,47 @@ class Vista3DWidget(QWidget):
         nx = -dy / length * fond.larghezza / 2
         ny = dx / length * fond.larghezza / 2
 
+        # 8 vertici del box
         v = [
-            (fond.x1 - nx, fond.y1 - ny, z0),
-            (fond.x2 - nx, fond.y2 - ny, z0),
-            (fond.x2 - nx, fond.y2 - ny, z1),
-            (fond.x1 - nx, fond.y1 - ny, z1),
-            (fond.x1 + nx, fond.y1 + ny, z0),
-            (fond.x2 + nx, fond.y2 + ny, z0),
-            (fond.x2 + nx, fond.y2 + ny, z1),
-            (fond.x1 + nx, fond.y1 + ny, z1),
+            (fond.x1 - nx, fond.y1 - ny, z0),  # 0
+            (fond.x2 - nx, fond.y2 - ny, z0),  # 1
+            (fond.x2 - nx, fond.y2 - ny, z1),  # 2
+            (fond.x1 - nx, fond.y1 - ny, z1),  # 3
+            (fond.x1 + nx, fond.y1 + ny, z0),  # 4
+            (fond.x2 + nx, fond.y2 + ny, z0),  # 5
+            (fond.x2 + nx, fond.y2 + ny, z1),  # 6
+            (fond.x1 + nx, fond.y1 + ny, z1),  # 7
         ]
 
         pv = [self.project3D_2D(*vtx) for vtx in v]
 
-        # Disegna facce visibili
-        color = self.COLORI['fondazione']
-        facce = [
-            ([0, 1, 2, 3], color),
-            ([5, 4, 7, 6], color.darker(110)),
-            ([3, 2, 6, 7], color.lighter(105)),
-        ]
+        # Colore fondazione (cemento grigio scuro)
+        base_color = QColor(130, 130, 135)
 
-        for indices, col in facce:
-            pts = [pv[i] for i in indices]
-            v1 = (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
-            v2 = (pts[2][0] - pts[0][0], pts[2][1] - pts[0][1])
-            cross = v1[0] * v2[1] - v1[1] * v2[0]
+        # Disegna TUTTE le facce (volumi pieni)
+        # Bottom
+        self._drawFace(painter, [pv[4], pv[5], pv[1], pv[0]], base_color.darker(125))
+        # Back
+        self._drawFace(painter, [pv[5], pv[4], pv[7], pv[6]], base_color.darker(115))
+        # Left
+        self._drawFace(painter, [pv[4], pv[0], pv[3], pv[7]], base_color.darker(112))
+        # Right
+        self._drawFace(painter, [pv[1], pv[5], pv[6], pv[2]], base_color.darker(108))
+        # Front
+        self._drawFace(painter, [pv[0], pv[1], pv[2], pv[3]], base_color)
+        # Top
+        self._drawFace(painter, [pv[3], pv[2], pv[6], pv[7]], base_color.lighter(108))
 
-            if cross > 0:
-                painter.setPen(QPen(QColor(60, 60, 60), 1))
-                painter.setBrush(QBrush(col))
-                path = QPainterPath()
-                path.moveTo(pts[0][0], pts[0][1])
-                for pt in pts[1:]:
-                    path.lineTo(pt[0], pt[1])
-                path.closeSubpath()
-                painter.drawPath(path)
+        # Bordi per definizione
+        painter.setPen(QPen(QColor(70, 70, 75), 2))
+        # Spigoli verticali principali
+        painter.drawLine(pv[0][0], pv[0][1], pv[3][0], pv[3][1])
+        painter.drawLine(pv[1][0], pv[1][1], pv[2][0], pv[2][1])
+        # Spigoli top
+        painter.drawLine(pv[3][0], pv[3][1], pv[2][0], pv[2][1])
+        painter.drawLine(pv[2][0], pv[2][1], pv[6][0], pv[6][1])
+        painter.drawLine(pv[6][0], pv[6][1], pv[7][0], pv[7][1])
+        painter.drawLine(pv[7][0], pv[7][1], pv[3][0], pv[3][1])
 
     def _drawCordolo3D(self, painter, cordolo: Cordolo):
         """Disegna cordolo come box 3D sopra il muro collegato"""
@@ -3974,60 +3983,53 @@ class Vista3DWidget(QWidget):
         # Colore cemento armato (grigio)
         base_color = QColor(160, 160, 165)
 
-        # 6 facce del box con illuminazione
-        facce = [
-            ([0, 1, 2, 3], base_color),              # Fronte
-            ([5, 4, 7, 6], base_color.darker(115)),  # Retro
-            ([4, 0, 3, 7], base_color.darker(110)),  # Sinistra
-            ([1, 5, 6, 2], base_color.darker(105)),  # Destra
-            ([3, 2, 6, 7], base_color.lighter(110)), # Top (più chiaro)
-            ([4, 5, 1, 0], base_color.darker(120)),  # Bottom
-        ]
+        # Disegna TUTTE le facce del cordolo (volumi pieni)
+        # Bottom
+        self._drawFace(painter, [pv[4], pv[5], pv[1], pv[0]], base_color.darker(120))
+        # Back
+        self._drawFace(painter, [pv[5], pv[4], pv[7], pv[6]], base_color.darker(115))
+        # Left
+        self._drawFace(painter, [pv[4], pv[0], pv[3], pv[7]], base_color.darker(112))
+        # Right
+        self._drawFace(painter, [pv[1], pv[5], pv[6], pv[2]], base_color.darker(108))
+        # Front
+        self._drawFace(painter, [pv[0], pv[1], pv[2], pv[3]], base_color)
+        # Top
+        self._drawFace(painter, [pv[3], pv[2], pv[6], pv[7]], base_color.lighter(110))
 
-        # Disegna facce visibili con backface culling
-        for indices, color in facce:
-            pts = [pv[i] for i in indices]
-
-            # Cross product per orientamento
-            v1 = (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
-            v2 = (pts[2][0] - pts[0][0], pts[2][1] - pts[0][1])
-            cross = v1[0] * v2[1] - v1[1] * v2[0]
-
-            if cross > 0:  # Faccia visibile
-                painter.setPen(QPen(QColor(80, 80, 90), 1))
-                painter.setBrush(QBrush(color))
-
-                path = QPainterPath()
-                path.moveTo(pts[0][0], pts[0][1])
-                for pt in pts[1:]:
-                    path.lineTo(pt[0], pt[1])
-                path.closeSubpath()
-                painter.drawPath(path)
+        # Bordi per definizione
+        painter.setPen(QPen(QColor(90, 90, 100), 2))
+        # Spigoli verticali
+        painter.drawLine(pv[0][0], pv[0][1], pv[3][0], pv[3][1])
+        painter.drawLine(pv[1][0], pv[1][1], pv[2][0], pv[2][1])
+        # Spigoli top
+        painter.drawLine(pv[3][0], pv[3][1], pv[2][0], pv[2][1])
+        painter.drawLine(pv[2][0], pv[2][1], pv[6][0], pv[6][1])
+        painter.drawLine(pv[6][0], pv[6][1], pv[7][0], pv[7][1])
+        painter.drawLine(pv[7][0], pv[7][1], pv[3][0], pv[3][1])
 
     def _drawSolaio3D(self, painter, solaio: Solaio):
-        """Disegna solaio come lastra 3D con spessore"""
-        # Trova quota dal piano
-        z_top = 3.0
-        for p in self.progetto.piani:
-            if p.numero == solaio.piano:
-                z_top = p.quota + p.altezza
-                break
+        """Disegna solaio come lastra 3D con spessore - posizionato sui muri"""
+        # Trova i muri del piano corrispondente basandosi sulla quota Z
+        # Piano 0: muri con z=0, Piano 1: muri con z=3, etc.
+        quota_piano = solaio.piano * 3.0  # Stima quota base del piano
 
-        # Spessore solaio
-        spessore = 0.25  # 25cm
-        z_bottom = z_top - spessore
-
-        # Trova bounding box dai muri del piano
+        # Trova muri che appartengono a questo piano (basandosi su z)
         muri_piano = [m for m in self.progetto.muri
-                     if abs(m.z + m.altezza - z_top) < 0.5]
+                     if abs(m.z - quota_piano) < 1.0]
 
         if not muri_piano:
-            # Fallback: usa tutti i muri
-            muri_piano = self.progetto.muri
-
-        if not muri_piano:
+            # Nessun muro per questo piano - non disegnare il solaio
             return
 
+        # Z del solaio = top dei muri di questo piano
+        z_top = max(m.z + m.altezza for m in muri_piano)
+
+        # Spessore solaio
+        spessore = 0.20  # 20cm
+        z_bottom = z_top - spessore
+
+        # Bounding box dai muri
         xs = [m.x1 for m in muri_piano] + [m.x2 for m in muri_piano]
         ys = [m.y1 for m in muri_piano] + [m.y2 for m in muri_piano]
 
@@ -4036,58 +4038,128 @@ class Vista3DWidget(QWidget):
 
         # 8 vertici del box solaio
         v = [
-            (x0, y0, z_bottom),  # 0
-            (x1, y0, z_bottom),  # 1
-            (x1, y1, z_bottom),  # 2
-            (x0, y1, z_bottom),  # 3
-            (x0, y0, z_top),     # 4
-            (x1, y0, z_top),     # 5
-            (x1, y1, z_top),     # 6
-            (x0, y1, z_top),     # 7
+            (x0, y0, z_bottom),  # 0: front-left-bottom
+            (x1, y0, z_bottom),  # 1: front-right-bottom
+            (x1, y1, z_bottom),  # 2: back-right-bottom
+            (x0, y1, z_bottom),  # 3: back-left-bottom
+            (x0, y0, z_top),     # 4: front-left-top
+            (x1, y0, z_top),     # 5: front-right-top
+            (x1, y1, z_top),     # 6: back-right-top
+            (x0, y1, z_top),     # 7: back-left-top
         ]
 
         pv = [self.project3D_2D(*vtx) for vtx in v]
 
         # Colore solaio (laterizio/cemento)
-        base_color = QColor(200, 185, 165)
+        base_color = QColor(190, 175, 155)
 
-        # Facce del solaio
-        facce = [
-            ([4, 5, 6, 7], base_color.lighter(105)),  # Top (visibile)
-            ([0, 3, 2, 1], base_color.darker(120)),   # Bottom
-            ([0, 1, 5, 4], base_color.darker(108)),   # Front
-            ([2, 3, 7, 6], base_color.darker(115)),   # Back
-            ([0, 4, 7, 3], base_color.darker(110)),   # Left
-            ([1, 2, 6, 5], base_color.darker(105)),   # Right
-        ]
+        # Disegna TUTTE le facce (no backface culling - usiamo z-sorting)
+        # Ordine: prima le facce più lontane
+        self._drawFace(painter, [pv[0], pv[3], pv[2], pv[1]], base_color.darker(125))  # Bottom
+        self._drawFace(painter, [pv[2], pv[3], pv[7], pv[6]], base_color.darker(115))  # Back
+        self._drawFace(painter, [pv[0], pv[4], pv[7], pv[3]], base_color.darker(112))  # Left
+        self._drawFace(painter, [pv[1], pv[2], pv[6], pv[5]], base_color.darker(108))  # Right
+        self._drawFace(painter, [pv[0], pv[1], pv[5], pv[4]], base_color.darker(110))  # Front
+        self._drawFace(painter, [pv[4], pv[5], pv[6], pv[7]], base_color.lighter(108)) # Top
 
-        for indices, color in facce:
-            pts = [pv[i] for i in indices]
-
-            v1 = (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
-            v2 = (pts[2][0] - pts[0][0], pts[2][1] - pts[0][1])
-            cross = v1[0] * v2[1] - v1[1] * v2[0]
-
-            if cross > 0:
-                color_with_alpha = QColor(color)
-                color_with_alpha.setAlpha(220)
-                painter.setPen(QPen(QColor(100, 90, 80), 1))
-                painter.setBrush(QBrush(color_with_alpha))
-
-                path = QPainterPath()
-                path.moveTo(pts[0][0], pts[0][1])
-                for pt in pts[1:]:
-                    path.lineTo(pt[0], pt[1])
-                path.closeSubpath()
-                painter.drawPath(path)
+        # Bordi per definizione
+        painter.setPen(QPen(QColor(80, 70, 60), 2))
+        painter.setBrush(Qt.NoBrush)
+        # Bordi top
+        painter.drawLine(pv[4][0], pv[4][1], pv[5][0], pv[5][1])
+        painter.drawLine(pv[5][0], pv[5][1], pv[6][0], pv[6][1])
+        painter.drawLine(pv[6][0], pv[6][1], pv[7][0], pv[7][1])
+        painter.drawLine(pv[7][0], pv[7][1], pv[4][0], pv[4][1])
 
         # Etichetta centrata
         if self.mostra_etichette:
             cx = sum(pv[i][0] for i in [4,5,6,7]) / 4
             cy = sum(pv[i][1] for i in [4,5,6,7]) / 4
-            painter.setPen(QColor(60, 50, 40))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(255, 255, 255, 200)))
+            painter.drawRoundedRect(int(cx) - 30, int(cy) - 10, 60, 18, 4, 4)
+            painter.setPen(QColor(50, 40, 30))
             painter.setFont(QFont("Arial", 9, QFont.Bold))
-            painter.drawText(int(cx) - 25, int(cy), f"Solaio P{solaio.piano}")
+            painter.drawText(int(cx) - 25, int(cy) + 4, f"Solaio P{solaio.piano}")
+
+    def _drawFace(self, painter, pts, color, border_color=None):
+        """Disegna una faccia poligonale con bordo"""
+        if border_color is None:
+            border_color = QColor(60, 50, 40)
+        painter.setPen(QPen(border_color, 1))
+        painter.setBrush(QBrush(color))
+        path = QPainterPath()
+        path.moveTo(pts[0][0], pts[0][1])
+        for pt in pts[1:]:
+            path.lineTo(pt[0], pt[1])
+        path.closeSubpath()
+        painter.drawPath(path)
+
+    def _drawFaceGradient(self, painter, pts, color1, color2, vertical=True):
+        """Disegna una faccia con gradiente per effetto 3D"""
+        if len(pts) < 3:
+            return
+
+        # Crea bounding box
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        x0, x1 = min(xs), max(xs)
+        y0, y1 = min(ys), max(ys)
+
+        # Gradiente
+        if vertical:
+            gradient = QLinearGradient(x0, y0, x0, y1)
+        else:
+            gradient = QLinearGradient(x0, y0, x1, y0)
+
+        gradient.setColorAt(0, color1)
+        gradient.setColorAt(1, color2)
+
+        painter.setPen(QPen(QColor(50, 40, 30), 1))
+        painter.setBrush(QBrush(gradient))
+
+        path = QPainterPath()
+        path.moveTo(pts[0][0], pts[0][1])
+        for pt in pts[1:]:
+            path.lineTo(pt[0], pt[1])
+        path.closeSubpath()
+        painter.drawPath(path)
+
+    def _drawShadows(self, painter):
+        """Disegna ombre proiettate a terra per tutti gli elementi"""
+        shadow_color = QColor(0, 0, 0, 40)  # Nero semi-trasparente
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(shadow_color))
+
+        # Offset ombra (simula luce da alto-destra)
+        shadow_offset_x = 0.3
+        shadow_offset_y = 0.3
+
+        # Ombre dei muri
+        for muro in self.progetto.muri:
+            dx = muro.x2 - muro.x1
+            dy = muro.y2 - muro.y1
+            length = math.sqrt(dx*dx + dy*dy)
+            if length < 0.01:
+                continue
+
+            nx = -dy / length * muro.spessore / 2
+            ny = dx / length * muro.spessore / 2
+
+            # Proietta ombra a z=0
+            pts = [
+                self.project3D_2D(muro.x1 - nx + shadow_offset_x, muro.y1 - ny + shadow_offset_y, 0),
+                self.project3D_2D(muro.x2 - nx + shadow_offset_x, muro.y2 - ny + shadow_offset_y, 0),
+                self.project3D_2D(muro.x2 + nx + shadow_offset_x, muro.y2 + ny + shadow_offset_y, 0),
+                self.project3D_2D(muro.x1 + nx + shadow_offset_x, muro.y1 + ny + shadow_offset_y, 0),
+            ]
+
+            path = QPainterPath()
+            path.moveTo(pts[0][0], pts[0][1])
+            for pt in pts[1:]:
+                path.lineTo(pt[0], pt[1])
+            path.closeSubpath()
+            painter.drawPath(path)
 
     def _drawInfo(self, painter):
         """Disegna informazioni overlay"""
