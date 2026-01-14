@@ -3635,13 +3635,33 @@ class Vista3DWidget(QWidget):
             for cordolo in self.progetto.cordoli:
                 cx = (cordolo.x1 + cordolo.x2) / 2
                 cy = (cordolo.y1 + cordolo.y2) / 2
-                depth = self._getElementDepth(cx, cy, 3)
+                # Trova z dal muro collegato
+                cz = 3.0  # default
+                for m in self.progetto.muri:
+                    if m.nome == cordolo.muro_collegato:
+                        cz = m.z + m.altezza + cordolo.altezza / 2
+                        break
+                depth = self._getElementDepth(cx, cy, cz)
                 elementi.append(('cordolo', cordolo, depth))
 
         # Solai
         if self.mostra_solai:
             for solaio in self.progetto.solai:
-                depth = self._getElementDepth(5, 5, solaio.piano * 3 + 3)
+                # Calcola z corretto dal piano
+                sz = 3.0
+                for p in self.progetto.piani:
+                    if p.numero == solaio.piano:
+                        sz = p.quota + p.altezza
+                        break
+                # Centro del solaio per z-sorting
+                if self.progetto.muri:
+                    xs = [m.x1 for m in self.progetto.muri] + [m.x2 for m in self.progetto.muri]
+                    ys = [m.y1 for m in self.progetto.muri] + [m.y2 for m in self.progetto.muri]
+                    scx = (min(xs) + max(xs)) / 2
+                    scy = (min(ys) + max(ys)) / 2
+                else:
+                    scx, scy = 5, 5
+                depth = self._getElementDepth(scx, scy, sz)
                 elementi.append(('solaio', solaio, depth))
 
         # Ordina per profondità (da lontano a vicino)
@@ -3766,7 +3786,8 @@ class Vista3DWidget(QWidget):
             cross = v1[0] * v2[1] - v1[1] * v2[0]
 
             if cross > 0:  # Faccia visibile
-                painter.setPen(QPen(QColor(80, 60, 40), 1))
+                # Bordo più definito e spesso
+                painter.setPen(QPen(QColor(60, 45, 30), 2))
                 painter.setBrush(QBrush(color))
 
                 path = QPainterPath()
@@ -3776,15 +3797,27 @@ class Vista3DWidget(QWidget):
                 path.closeSubpath()
                 painter.drawPath(path)
 
+        # Disegna spigoli verticali per definizione
+        painter.setPen(QPen(QColor(50, 35, 20), 2))
+        # Spigolo frontale sinistro
+        painter.drawLine(pv[0][0], pv[0][1], pv[3][0], pv[3][1])
+        # Spigolo frontale destro
+        painter.drawLine(pv[1][0], pv[1][1], pv[2][0], pv[2][1])
+
         # Disegna aperture
         if self.mostra_aperture:
             self._drawApertureSuMuro(painter, muro, v)
 
-        # Etichetta
+        # Etichetta con sfondo
         if self.mostra_etichette:
             cx = (pv[0][0] + pv[2][0]) / 2
             cy = (pv[0][1] + pv[2][1]) / 2
-            painter.setPen(QColor(40, 40, 40))
+            # Sfondo etichetta
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(255, 255, 255, 180)))
+            painter.drawRoundedRect(int(cx) - 15, int(cy) - 12, 30, 16, 3, 3)
+            # Testo
+            painter.setPen(QColor(40, 30, 20))
             painter.setFont(QFont("Arial", 9, QFont.Bold))
             painter.drawText(int(cx) - 10, int(cy), muro.nome)
 
@@ -3902,12 +3935,14 @@ class Vista3DWidget(QWidget):
                 painter.drawPath(path)
 
     def _drawCordolo3D(self, painter, cordolo: Cordolo):
-        """Disegna cordolo come box 3D sottile"""
-        # Trova quota dal piano
-        z0 = 3.0  # Default
-        for p in self.progetto.piani:
-            if p.numero == cordolo.piano:
-                z0 = p.quota + p.altezza
+        """Disegna cordolo come box 3D sopra il muro collegato"""
+        # Trova il muro collegato per posizionare correttamente il cordolo
+        z0 = 3.0  # Default: sopra piano terra
+        muro_collegato = None
+        for m in self.progetto.muri:
+            if m.nome == cordolo.muro_collegato:
+                muro_collegato = m
+                z0 = m.z + m.altezza  # Cordolo sopra il muro
                 break
 
         z1 = z0 + cordolo.altezza
@@ -3918,41 +3953,77 @@ class Vista3DWidget(QWidget):
         if length < 0.01:
             return
 
+        # Normale per spessore
         nx = -dy / length * cordolo.base / 2
         ny = dx / length * cordolo.base / 2
 
+        # 8 vertici del box 3D
         v = [
-            (cordolo.x1 - nx, cordolo.y1 - ny, z0),
-            (cordolo.x2 - nx, cordolo.y2 - ny, z0),
-            (cordolo.x2 - nx, cordolo.y2 - ny, z1),
-            (cordolo.x1 - nx, cordolo.y1 - ny, z1),
+            (cordolo.x1 - nx, cordolo.y1 - ny, z0),  # 0: fronte-sx-basso
+            (cordolo.x2 - nx, cordolo.y2 - ny, z0),  # 1: fronte-dx-basso
+            (cordolo.x2 - nx, cordolo.y2 - ny, z1),  # 2: fronte-dx-alto
+            (cordolo.x1 - nx, cordolo.y1 - ny, z1),  # 3: fronte-sx-alto
+            (cordolo.x1 + nx, cordolo.y1 + ny, z0),  # 4: retro-sx-basso
+            (cordolo.x2 + nx, cordolo.y2 + ny, z0),  # 5: retro-dx-basso
+            (cordolo.x2 + nx, cordolo.y2 + ny, z1),  # 6: retro-dx-alto
+            (cordolo.x1 + nx, cordolo.y1 + ny, z1),  # 7: retro-sx-alto
         ]
 
         pv = [self.project3D_2D(*vtx) for vtx in v]
 
-        color = self.COLORI['cordolo']
-        painter.setPen(QPen(QColor(100, 100, 100), 1))
-        painter.setBrush(QBrush(color))
+        # Colore cemento armato (grigio)
+        base_color = QColor(160, 160, 165)
 
-        path = QPainterPath()
-        path.moveTo(pv[0][0], pv[0][1])
-        for pt in pv[1:]:
-            path.lineTo(pt[0], pt[1])
-        path.closeSubpath()
-        painter.drawPath(path)
+        # 6 facce del box con illuminazione
+        facce = [
+            ([0, 1, 2, 3], base_color),              # Fronte
+            ([5, 4, 7, 6], base_color.darker(115)),  # Retro
+            ([4, 0, 3, 7], base_color.darker(110)),  # Sinistra
+            ([1, 5, 6, 2], base_color.darker(105)),  # Destra
+            ([3, 2, 6, 7], base_color.lighter(110)), # Top (più chiaro)
+            ([4, 5, 1, 0], base_color.darker(120)),  # Bottom
+        ]
+
+        # Disegna facce visibili con backface culling
+        for indices, color in facce:
+            pts = [pv[i] for i in indices]
+
+            # Cross product per orientamento
+            v1 = (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+            v2 = (pts[2][0] - pts[0][0], pts[2][1] - pts[0][1])
+            cross = v1[0] * v2[1] - v1[1] * v2[0]
+
+            if cross > 0:  # Faccia visibile
+                painter.setPen(QPen(QColor(80, 80, 90), 1))
+                painter.setBrush(QBrush(color))
+
+                path = QPainterPath()
+                path.moveTo(pts[0][0], pts[0][1])
+                for pt in pts[1:]:
+                    path.lineTo(pt[0], pt[1])
+                path.closeSubpath()
+                painter.drawPath(path)
 
     def _drawSolaio3D(self, painter, solaio: Solaio):
-        """Disegna solaio come piano orizzontale"""
-        # Trova bounding box muri del piano
-        z = 3.0
+        """Disegna solaio come lastra 3D con spessore"""
+        # Trova quota dal piano
+        z_top = 3.0
         for p in self.progetto.piani:
             if p.numero == solaio.piano:
-                z = p.quota + p.altezza
+                z_top = p.quota + p.altezza
                 break
 
-        # Usa bounding box muri per dimensione
+        # Spessore solaio
+        spessore = 0.25  # 25cm
+        z_bottom = z_top - spessore
+
+        # Trova bounding box dai muri del piano
         muri_piano = [m for m in self.progetto.muri
-                     if abs(m.z - (z - 3.0)) < 0.5]  # Muri dello stesso piano
+                     if abs(m.z + m.altezza - z_top) < 0.5]
+
+        if not muri_piano:
+            # Fallback: usa tutti i muri
+            muri_piano = self.progetto.muri
 
         if not muri_piano:
             return
@@ -3963,33 +4034,60 @@ class Vista3DWidget(QWidget):
         x0, x1 = min(xs), max(xs)
         y0, y1 = min(ys), max(ys)
 
-        # Disegna piano
+        # 8 vertici del box solaio
         v = [
-            self.project3D_2D(x0, y0, z),
-            self.project3D_2D(x1, y0, z),
-            self.project3D_2D(x1, y1, z),
-            self.project3D_2D(x0, y1, z),
+            (x0, y0, z_bottom),  # 0
+            (x1, y0, z_bottom),  # 1
+            (x1, y1, z_bottom),  # 2
+            (x0, y1, z_bottom),  # 3
+            (x0, y0, z_top),     # 4
+            (x1, y0, z_top),     # 5
+            (x1, y1, z_top),     # 6
+            (x0, y1, z_top),     # 7
         ]
 
-        color = self.COLORI['solaio']
-        color.setAlpha(180)
-        painter.setPen(QPen(QColor(80, 100, 80), 1))
-        painter.setBrush(QBrush(color))
+        pv = [self.project3D_2D(*vtx) for vtx in v]
 
-        path = QPainterPath()
-        path.moveTo(v[0][0], v[0][1])
-        for pt in v[1:]:
-            path.lineTo(pt[0], pt[1])
-        path.closeSubpath()
-        painter.drawPath(path)
+        # Colore solaio (laterizio/cemento)
+        base_color = QColor(200, 185, 165)
 
-        # Etichetta
+        # Facce del solaio
+        facce = [
+            ([4, 5, 6, 7], base_color.lighter(105)),  # Top (visibile)
+            ([0, 3, 2, 1], base_color.darker(120)),   # Bottom
+            ([0, 1, 5, 4], base_color.darker(108)),   # Front
+            ([2, 3, 7, 6], base_color.darker(115)),   # Back
+            ([0, 4, 7, 3], base_color.darker(110)),   # Left
+            ([1, 2, 6, 5], base_color.darker(105)),   # Right
+        ]
+
+        for indices, color in facce:
+            pts = [pv[i] for i in indices]
+
+            v1 = (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+            v2 = (pts[2][0] - pts[0][0], pts[2][1] - pts[0][1])
+            cross = v1[0] * v2[1] - v1[1] * v2[0]
+
+            if cross > 0:
+                color_with_alpha = QColor(color)
+                color_with_alpha.setAlpha(220)
+                painter.setPen(QPen(QColor(100, 90, 80), 1))
+                painter.setBrush(QBrush(color_with_alpha))
+
+                path = QPainterPath()
+                path.moveTo(pts[0][0], pts[0][1])
+                for pt in pts[1:]:
+                    path.lineTo(pt[0], pt[1])
+                path.closeSubpath()
+                painter.drawPath(path)
+
+        # Etichetta centrata
         if self.mostra_etichette:
-            cx = sum(p[0] for p in v) / 4
-            cy = sum(p[1] for p in v) / 4
-            painter.setPen(QColor(40, 60, 40))
-            painter.setFont(QFont("Arial", 8))
-            painter.drawText(int(cx) - 15, int(cy), f"Solaio P{solaio.piano}")
+            cx = sum(pv[i][0] for i in [4,5,6,7]) / 4
+            cy = sum(pv[i][1] for i in [4,5,6,7]) / 4
+            painter.setPen(QColor(60, 50, 40))
+            painter.setFont(QFont("Arial", 9, QFont.Bold))
+            painter.drawText(int(cx) - 25, int(cy), f"Solaio P{solaio.piano}")
 
     def _drawInfo(self, painter):
         """Disegna informazioni overlay"""
