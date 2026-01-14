@@ -1168,6 +1168,10 @@ class RibbonPanel(QFrame):
     def addButton(self, button: RibbonButton):
         self.button_layout.addWidget(button)
 
+    def addWidget(self, widget):
+        """Aggiunge un widget generico al pannello"""
+        self.button_layout.addWidget(widget)
+
 
 class RibbonTab(QWidget):
     """Tab del Ribbon con più pannelli"""
@@ -2173,6 +2177,280 @@ class DialogoFondazione(QDialog):
 
 
 # ============================================================================
+# DIALOGO CORDOLO
+# ============================================================================
+
+class DialogoCordolo(QDialog):
+    """Dialogo per inserire cordoli in c.a."""
+
+    def __init__(self, progetto: Progetto, piano: int = 0, muro_selezionato: str = "", parent=None):
+        super().__init__(parent)
+        self.progetto = progetto
+        self.cordolo_creato = None
+
+        self.setWindowTitle("Inserisci Cordolo")
+        self.setMinimumSize(400, 450)
+
+        layout = QVBoxLayout(self)
+
+        # Header
+        header = QLabel("Cordolo in Cemento Armato")
+        header.setStyleSheet("font-size: 14px; font-weight: bold; color: #0066cc;")
+        layout.addWidget(header)
+
+        # Piano
+        piano_group = QGroupBox("Piano")
+        piano_layout = QFormLayout()
+        self.piano_spin = QSpinBox()
+        self.piano_spin.setRange(0, 10)
+        self.piano_spin.setValue(piano)
+        piano_layout.addRow("Piano:", self.piano_spin)
+        piano_group.setLayout(piano_layout)
+        layout.addWidget(piano_group)
+
+        # Muro collegato
+        muro_group = QGroupBox("Muro Collegato")
+        muro_layout = QFormLayout()
+        self.muro_combo = QComboBox()
+        self.muro_combo.addItem("-- Seleziona muro --", "")
+        for muro in progetto.muri:
+            self.muro_combo.addItem(f"{muro.nome} ({muro.lunghezza:.2f}m)", muro.nome)
+        if muro_selezionato:
+            idx = self.muro_combo.findData(muro_selezionato)
+            if idx >= 0:
+                self.muro_combo.setCurrentIndex(idx)
+        self.muro_combo.currentIndexChanged.connect(self.onMuroChanged)
+        muro_layout.addRow("Muro:", self.muro_combo)
+
+        self.auto_pos = QCheckBox("Posiziona automaticamente sul muro")
+        self.auto_pos.setChecked(True)
+        muro_layout.addRow("", self.auto_pos)
+        muro_group.setLayout(muro_layout)
+        layout.addWidget(muro_group)
+
+        # Dimensioni
+        dim_group = QGroupBox("Dimensioni")
+        dim_layout = QFormLayout()
+
+        self.base_spin = QDoubleSpinBox()
+        self.base_spin.setRange(0.15, 0.60)
+        self.base_spin.setValue(0.30)
+        self.base_spin.setSuffix(" m")
+        dim_layout.addRow("Base:", self.base_spin)
+
+        self.altezza_spin = QDoubleSpinBox()
+        self.altezza_spin.setRange(0.15, 0.50)
+        self.altezza_spin.setValue(0.25)
+        self.altezza_spin.setSuffix(" m")
+        dim_layout.addRow("Altezza:", self.altezza_spin)
+
+        dim_group.setLayout(dim_layout)
+        layout.addWidget(dim_group)
+
+        # Materiali
+        mat_group = QGroupBox("Materiali e Armatura")
+        mat_layout = QFormLayout()
+
+        self.cls_combo = QComboBox()
+        self.cls_combo.addItems(["C20/25", "C25/30", "C28/35", "C30/37"])
+        self.cls_combo.setCurrentText("C25/30")
+        mat_layout.addRow("Calcestruzzo:", self.cls_combo)
+
+        self.acciaio_combo = QComboBox()
+        self.acciaio_combo.addItems(["B450C", "B450A", "B500A"])
+        mat_layout.addRow("Acciaio:", self.acciaio_combo)
+
+        self.arm_edit = QLineEdit("4Ø16")
+        mat_layout.addRow("Armatura long.:", self.arm_edit)
+
+        self.staffe_edit = QLineEdit("Ø8/20")
+        mat_layout.addRow("Staffe:", self.staffe_edit)
+
+        mat_group.setLayout(mat_layout)
+        layout.addWidget(mat_group)
+
+        # Pulsanti
+        btn_layout = QHBoxLayout()
+        btn_annulla = QPushButton("Annulla")
+        btn_annulla.clicked.connect(self.reject)
+        btn_crea = QPushButton("Crea Cordolo")
+        btn_crea.setStyleSheet("background-color: #0066cc; color: white; font-weight: bold; padding: 8px 20px;")
+        btn_crea.clicked.connect(self.creaCordolo)
+        btn_layout.addWidget(btn_annulla)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_crea)
+        layout.addLayout(btn_layout)
+
+    def onMuroChanged(self, idx):
+        muro_nome = self.muro_combo.currentData()
+        self.auto_pos.setEnabled(bool(muro_nome))
+
+    def creaCordolo(self):
+        muro_nome = self.muro_combo.currentData()
+        x1, y1, x2, y2 = 0, 0, 0, 0
+
+        if muro_nome and self.auto_pos.isChecked():
+            muro = next((m for m in self.progetto.muri if m.nome == muro_nome), None)
+            if muro:
+                x1, y1, x2, y2 = muro.x1, muro.y1, muro.x2, muro.y2
+
+        n = len(self.progetto.cordoli) + 1
+        self.cordolo_creato = Cordolo(
+            nome=f"C{n}",
+            piano=self.piano_spin.value(),
+            x1=x1, y1=y1, x2=x2, y2=y2,
+            base=self.base_spin.value(),
+            altezza=self.altezza_spin.value(),
+            cls=self.cls_combo.currentText(),
+            acciaio=self.acciaio_combo.currentText(),
+            armatura_longitudinale=self.arm_edit.text(),
+            staffe=self.staffe_edit.text(),
+            muro_collegato=muro_nome or ""
+        )
+        self.accept()
+
+
+# ============================================================================
+# DIALOGO TIRANTE
+# ============================================================================
+
+class DialogoTirante(QDialog):
+    """Dialogo per inserire tiranti/catene"""
+
+    def __init__(self, progetto: Progetto, piano: int = 0, parent=None):
+        super().__init__(parent)
+        self.progetto = progetto
+        self.tirante_creato = None
+
+        self.setWindowTitle("Inserisci Tirante")
+        self.setMinimumSize(400, 500)
+
+        layout = QVBoxLayout(self)
+
+        # Header
+        header = QLabel("Tirante / Catena Metallica")
+        header.setStyleSheet("font-size: 14px; font-weight: bold; color: #0066cc;")
+        layout.addWidget(header)
+
+        # Piano
+        piano_group = QGroupBox("Posizione")
+        piano_layout = QFormLayout()
+
+        self.piano_spin = QSpinBox()
+        self.piano_spin.setRange(0, 10)
+        self.piano_spin.setValue(piano)
+        piano_layout.addRow("Piano:", self.piano_spin)
+
+        self.quota_spin = QDoubleSpinBox()
+        self.quota_spin.setRange(0.0, 5.0)
+        self.quota_spin.setValue(2.8)
+        self.quota_spin.setSuffix(" m")
+        piano_layout.addRow("Quota dal piano:", self.quota_spin)
+
+        piano_group.setLayout(piano_layout)
+        layout.addWidget(piano_group)
+
+        # Muri di ancoraggio (inizio e fine)
+        anc_group = QGroupBox("Muri di Ancoraggio")
+        anc_layout = QFormLayout()
+
+        self.muro1_combo = QComboBox()
+        self.muro1_combo.addItem("-- Muro iniziale --", "")
+        self.muro2_combo = QComboBox()
+        self.muro2_combo.addItem("-- Muro finale --", "")
+        for muro in progetto.muri:
+            self.muro1_combo.addItem(f"{muro.nome}", muro.nome)
+            self.muro2_combo.addItem(f"{muro.nome}", muro.nome)
+
+        anc_layout.addRow("Muro iniziale:", self.muro1_combo)
+        anc_layout.addRow("Muro finale:", self.muro2_combo)
+        anc_group.setLayout(anc_layout)
+        layout.addWidget(anc_group)
+
+        # Caratteristiche
+        car_group = QGroupBox("Caratteristiche")
+        car_layout = QFormLayout()
+
+        self.tipo_combo = QComboBox()
+        self.tipo_combo.addItems(["barra", "cavo", "piatto"])
+        car_layout.addRow("Tipo:", self.tipo_combo)
+
+        self.diametro_spin = QDoubleSpinBox()
+        self.diametro_spin.setRange(12, 50)
+        self.diametro_spin.setValue(24)
+        self.diametro_spin.setSuffix(" mm")
+        car_layout.addRow("Diametro:", self.diametro_spin)
+
+        self.materiale_combo = QComboBox()
+        self.materiale_combo.addItems(["S235", "S275", "S355"])
+        self.materiale_combo.setCurrentText("S275")
+        car_layout.addRow("Materiale:", self.materiale_combo)
+
+        self.pretensione_spin = QDoubleSpinBox()
+        self.pretensione_spin.setRange(0, 500)
+        self.pretensione_spin.setValue(0)
+        self.pretensione_spin.setSuffix(" kN")
+        car_layout.addRow("Pretensione:", self.pretensione_spin)
+
+        car_group.setLayout(car_layout)
+        layout.addWidget(car_group)
+
+        # Capochiave
+        cap_group = QGroupBox("Capochiave")
+        cap_layout = QFormLayout()
+
+        self.capochiave_combo = QComboBox()
+        self.capochiave_combo.addItems(["piastra", "paletto", "incassato"])
+        cap_layout.addRow("Tipo:", self.capochiave_combo)
+
+        cap_group.setLayout(cap_layout)
+        layout.addWidget(cap_group)
+
+        # Pulsanti
+        btn_layout = QHBoxLayout()
+        btn_annulla = QPushButton("Annulla")
+        btn_annulla.clicked.connect(self.reject)
+        btn_crea = QPushButton("Crea Tirante")
+        btn_crea.setStyleSheet("background-color: #0066cc; color: white; font-weight: bold; padding: 8px 20px;")
+        btn_crea.clicked.connect(self.creaTirante)
+        btn_layout.addWidget(btn_annulla)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_crea)
+        layout.addLayout(btn_layout)
+
+    def creaTirante(self):
+        muro1_nome = self.muro1_combo.currentData()
+        muro2_nome = self.muro2_combo.currentData()
+
+        x1, y1, x2, y2 = 0, 0, 0, 0
+
+        # Trova coordinate dai muri selezionati
+        if muro1_nome:
+            muro1 = next((m for m in self.progetto.muri if m.nome == muro1_nome), None)
+            if muro1:
+                x1, y1 = (muro1.x1 + muro1.x2) / 2, (muro1.y1 + muro1.y2) / 2
+
+        if muro2_nome:
+            muro2 = next((m for m in self.progetto.muri if m.nome == muro2_nome), None)
+            if muro2:
+                x2, y2 = (muro2.x1 + muro2.x2) / 2, (muro2.y1 + muro2.y2) / 2
+
+        n = len(self.progetto.tiranti) + 1
+        self.tirante_creato = Tirante(
+            nome=f"T{n}",
+            piano=self.piano_spin.value(),
+            x1=x1, y1=y1, x2=x2, y2=y2,
+            diametro=self.diametro_spin.value(),
+            materiale=self.materiale_combo.currentText(),
+            tipo=self.tipo_combo.currentText(),
+            pretensione=self.pretensione_spin.value(),
+            capochiave_tipo=self.capochiave_combo.currentText(),
+            quota_z=self.quota_spin.value()
+        )
+        self.accept()
+
+
+# ============================================================================
 # STEP FONDAZIONI PANEL
 # ============================================================================
 
@@ -2225,6 +2503,21 @@ class StepFondazioniPanel(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.table)
 
+        # Sezione muri senza fondazione
+        self.missing_group = QGroupBox("Muri senza fondazione")
+        self.missing_group.setStyleSheet("""
+            QGroupBox { color: #c70000; font-weight: bold; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
+        """)
+        missing_layout = QVBoxLayout()
+        self.missing_list = QWidget()
+        self.missing_list_layout = QVBoxLayout(self.missing_list)
+        self.missing_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.missing_list_layout.setSpacing(4)
+        missing_layout.addWidget(self.missing_list)
+        self.missing_group.setLayout(missing_layout)
+        layout.addWidget(self.missing_group)
+
         # Riepilogo
         self.summary = QLabel("")
         self.summary.setStyleSheet("padding: 10px; background: #f8f9fa; border-radius: 5px;")
@@ -2234,6 +2527,7 @@ class StepFondazioniPanel(QWidget):
         btn_layout = QHBoxLayout()
 
         btn_indietro = QPushButton("← Indietro")
+        btn_indietro.clicked.connect(lambda: self.parent().goToStep(WorkflowStep.APERTURE))
         btn_layout.addWidget(btn_indietro)
 
         btn_layout.addStretch()
@@ -2263,6 +2557,9 @@ class StepFondazioniPanel(QWidget):
             self.table.setItem(i, 5, QTableWidgetItem(f"{fond.altezza:.2f}"))
             self.table.setItem(i, 6, QTableWidgetItem(f"{fond.sigma_amm_terreno:.0f}"))
 
+        # Aggiorna lista muri senza fondazione
+        self._updateMissingWalls()
+
         # Riepilogo
         n_fond = len(self.progetto.fondazioni)
         n_muri = len(self.progetto.muri)
@@ -2272,6 +2569,75 @@ class StepFondazioniPanel(QWidget):
 📊 Riepilogo: {n_fond} fondazioni definite per {n_muri} muri ({copertura:.0f}% copertura)
 {'⚠️ Alcuni muri non hanno fondazione!' if copertura < 100 else '✓ Tutti i muri hanno fondazione'}
         """.strip())
+
+    def _updateMissingWalls(self):
+        """Aggiorna lista muri senza fondazione"""
+        # Pulisci layout esistente
+        while self.missing_list_layout.count():
+            item = self.missing_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Trova muri senza fondazione
+        muri_con_fond = {f.muro_collegato for f in self.progetto.fondazioni}
+        muri_mancanti = [m for m in self.progetto.muri if m.nome not in muri_con_fond]
+
+        if not muri_mancanti:
+            self.missing_group.hide()
+            return
+
+        self.missing_group.show()
+        self.missing_group.setTitle(f"Muri senza fondazione ({len(muri_mancanti)})")
+
+        for muro in muri_mancanti[:8]:  # Mostra max 8
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(5, 2, 5, 2)
+
+            label = QLabel(f"{muro.nome} - L={muro.lunghezza:.2f}m, s={muro.spessore:.2f}m")
+            label.setStyleSheet("color: #333;")
+            row_layout.addWidget(label, 1)
+
+            btn_add = QPushButton("+ Aggiungi")
+            btn_add.setFixedWidth(90)
+            btn_add.setStyleSheet("""
+                QPushButton {
+                    background-color: #28a745;
+                    color: white;
+                    border-radius: 3px;
+                    padding: 3px 8px;
+                }
+                QPushButton:hover { background-color: #218838; }
+            """)
+            btn_add.clicked.connect(lambda checked, m=muro: self._quickAddFondazione(m))
+            row_layout.addWidget(btn_add)
+
+            self.missing_list_layout.addWidget(row)
+
+        if len(muri_mancanti) > 8:
+            more = QLabel(f"... e altri {len(muri_mancanti) - 8} muri")
+            more.setStyleSheet("color: #666; font-style: italic;")
+            self.missing_list_layout.addWidget(more)
+
+    def _quickAddFondazione(self, muro):
+        """Aggiunge fondazione automatica per un muro specifico"""
+        n = len(self.progetto.fondazioni) + 1
+        fond = Fondazione(
+            nome=f"F{n}",
+            tipo="trave_rovescia",
+            x1=muro.x1, y1=muro.y1,
+            x2=muro.x2, y2=muro.y2,
+            larghezza=max(0.60, muro.spessore * 2),
+            altezza=0.50,
+            profondita=1.0,
+            muro_collegato=muro.nome
+        )
+        self.progetto.fondazioni.append(fond)
+        self.refresh()
+        # Notifica la modifica
+        main_win = self.window()
+        if hasattr(main_win, 'setModificato'):
+            main_win.setModificato(True)
 
     def aggiungiFondazione(self):
         dlg = DialogoFondazione(self.progetto, parent=self)
@@ -2385,6 +2751,7 @@ class StepCordoliPanel(QWidget):
         # Pulsanti navigazione
         btn_layout = QHBoxLayout()
         btn_indietro = QPushButton("← Indietro")
+        btn_indietro.clicked.connect(lambda: self.parent().goToStep(WorkflowStep.FONDAZIONI))
         btn_layout.addWidget(btn_indietro)
         btn_layout.addStretch()
         self.btn_avanti = QPushButton("Avanti → Solai")
@@ -2419,12 +2786,34 @@ class StepCordoliPanel(QWidget):
             self.tiranti_table.setItem(i, 5, QTableWidgetItem(f"{t.resistenza_trazione:.1f}"))
 
     def aggiungiCordolo(self):
-        # TODO: Dialogo cordolo
-        QMessageBox.information(self, "Info", "Seleziona un muro e aggiungi il cordolo")
+        """Apre dialogo per inserire nuovo cordolo"""
+        piano_corrente = 0
+        if self.progetto.piani:
+            piano_corrente = max(p.numero for p in self.progetto.piani)
+
+        dlg = DialogoCordolo(self.progetto, piano=piano_corrente, parent=self)
+        if dlg.exec_() == QDialog.Accepted and dlg.cordolo_creato:
+            self.progetto.cordoli.append(dlg.cordolo_creato)
+            self.refreshTables()
+            # Notifica la modifica
+            main_win = self.window()
+            if hasattr(main_win, 'setModificato'):
+                main_win.setModificato(True)
 
     def aggiungiTirante(self):
-        # TODO: Dialogo tirante
-        QMessageBox.information(self, "Info", "Definisci posizione e diametro tirante")
+        """Apre dialogo per inserire nuovo tirante"""
+        piano_corrente = 0
+        if self.progetto.piani:
+            piano_corrente = max(p.numero for p in self.progetto.piani)
+
+        dlg = DialogoTirante(self.progetto, piano=piano_corrente, parent=self)
+        if dlg.exec_() == QDialog.Accepted and dlg.tirante_creato:
+            self.progetto.tiranti.append(dlg.tirante_creato)
+            self.refreshTables()
+            # Notifica la modifica
+            main_win = self.window()
+            if hasattr(main_win, 'setModificato'):
+                main_win.setModificato(True)
 
     def generaCordoliAutomatici(self):
         """Genera cordoli su tutti i muri dell'ultimo piano"""
@@ -2458,6 +2847,204 @@ class StepCordoliPanel(QWidget):
 
 
 # ============================================================================
+# DIALOGO SOLAIO
+# ============================================================================
+
+class DialogoSolaio(QDialog):
+    """Dialogo per inserire solai con tutti i parametri"""
+
+    TIPI_SOLAIO = [
+        ("Laterocemento 20+5", 3.2, "Solaio in laterizio e cls, H=25cm"),
+        ("Laterocemento 25+5", 3.8, "Solaio in laterizio e cls, H=30cm"),
+        ("Laterocemento 16+4", 2.6, "Solaio in laterizio e cls, H=20cm"),
+        ("Soletta piena 20cm", 5.0, "Soletta in c.a. pieno"),
+        ("Soletta piena 15cm", 3.75, "Soletta in c.a. pieno"),
+        ("Legno tradizionale", 1.2, "Tavolato su travi in legno"),
+        ("Legno lamellare", 1.5, "Pannello X-LAM o simile"),
+        ("Acciaio e lamiera", 2.0, "Lamiera grecata collaborante"),
+        ("Predalles", 2.8, "Lastre predalles prefabbricate"),
+        ("Copertura leggera", 0.8, "Pannelli sandwich o simili"),
+    ]
+
+    CATEGORIE_USO = [
+        ("A", "Residenziale (2.0 kN/m²)"),
+        ("B", "Uffici (3.0 kN/m²)"),
+        ("C1", "Aree con tavoli (3.0 kN/m²)"),
+        ("C2", "Aree con sedili fissi (4.0 kN/m²)"),
+        ("C3", "Aree senza ostacoli (5.0 kN/m²)"),
+        ("D1", "Negozi (4.0 kN/m²)"),
+        ("D2", "Grandi magazzini (5.0 kN/m²)"),
+        ("E", "Biblioteche, archivi (6.0 kN/m²)"),
+        ("F", "Autorimesse (2.5 kN/m²)"),
+        ("H", "Coperture (0.5 kN/m²)"),
+    ]
+
+    CARICHI_CATEGORIA = {
+        "A": 2.0, "B": 3.0, "C1": 3.0, "C2": 4.0, "C3": 5.0,
+        "D1": 4.0, "D2": 5.0, "E": 6.0, "F": 2.5, "H": 0.5
+    }
+
+    def __init__(self, progetto: Progetto, piano: int = 0, parent=None):
+        super().__init__(parent)
+        self.progetto = progetto
+        self.solaio_creato = None
+
+        self.setWindowTitle("Inserisci Solaio")
+        self.setMinimumSize(500, 600)
+
+        layout = QVBoxLayout(self)
+
+        # Header
+        header = QLabel("Definizione Solaio")
+        header.setStyleSheet("font-size: 14px; font-weight: bold; color: #0066cc;")
+        layout.addWidget(header)
+
+        # Piano
+        piano_group = QGroupBox("Piano")
+        piano_layout = QFormLayout()
+        self.piano_combo = QComboBox()
+        for p in progetto.piani:
+            self.piano_combo.addItem(f"{p.nome} (quota {p.quota:.2f}m)", p.numero)
+        if piano < len(progetto.piani):
+            self.piano_combo.setCurrentIndex(piano)
+        piano_layout.addRow("Piano:", self.piano_combo)
+        piano_group.setLayout(piano_layout)
+        layout.addWidget(piano_group)
+
+        # Tipo solaio
+        tipo_group = QGroupBox("Tipo Solaio")
+        tipo_layout = QVBoxLayout()
+
+        self.tipo_combo = QComboBox()
+        for nome, peso, desc in self.TIPI_SOLAIO:
+            self.tipo_combo.addItem(f"{nome} ({peso:.1f} kN/m²)", (nome, peso))
+        self.tipo_combo.currentIndexChanged.connect(self.onTipoChanged)
+        tipo_layout.addWidget(self.tipo_combo)
+
+        self.tipo_desc = QLabel(self.TIPI_SOLAIO[0][2])
+        self.tipo_desc.setStyleSheet("color: #666; font-style: italic;")
+        tipo_layout.addWidget(self.tipo_desc)
+
+        tipo_group.setLayout(tipo_layout)
+        layout.addWidget(tipo_group)
+
+        # Dimensioni
+        dim_group = QGroupBox("Dimensioni")
+        dim_layout = QFormLayout()
+
+        self.luce_spin = QDoubleSpinBox()
+        self.luce_spin.setRange(1.0, 15.0)
+        self.luce_spin.setValue(5.0)
+        self.luce_spin.setSuffix(" m")
+        self.luce_spin.setToolTip("Luce (distanza tra appoggi)")
+        dim_layout.addRow("Luce:", self.luce_spin)
+
+        self.larghezza_spin = QDoubleSpinBox()
+        self.larghezza_spin.setRange(1.0, 30.0)
+        self.larghezza_spin.setValue(5.0)
+        self.larghezza_spin.setSuffix(" m")
+        self.larghezza_spin.setToolTip("Larghezza del campo di solaio")
+        dim_layout.addRow("Larghezza:", self.larghezza_spin)
+
+        self.area_label = QLabel("25.0 m²")
+        self.area_label.setStyleSheet("font-weight: bold;")
+        dim_layout.addRow("Area:", self.area_label)
+
+        self.luce_spin.valueChanged.connect(self.updateArea)
+        self.larghezza_spin.valueChanged.connect(self.updateArea)
+
+        dim_group.setLayout(dim_layout)
+        layout.addWidget(dim_group)
+
+        # Carichi
+        carichi_group = QGroupBox("Carichi")
+        carichi_layout = QFormLayout()
+
+        self.categoria_combo = QComboBox()
+        for cat, desc in self.CATEGORIE_USO:
+            self.categoria_combo.addItem(f"{cat} - {desc}", cat)
+        self.categoria_combo.currentIndexChanged.connect(self.onCategoriaChanged)
+        carichi_layout.addRow("Categoria uso:", self.categoria_combo)
+
+        self.peso_spin = QDoubleSpinBox()
+        self.peso_spin.setRange(0.5, 10.0)
+        self.peso_spin.setValue(3.2)
+        self.peso_spin.setSuffix(" kN/m²")
+        self.peso_spin.setToolTip("Peso proprio strutturale (G1)")
+        carichi_layout.addRow("Peso proprio (G1):", self.peso_spin)
+
+        self.perm_spin = QDoubleSpinBox()
+        self.perm_spin.setRange(0.5, 5.0)
+        self.perm_spin.setValue(1.5)
+        self.perm_spin.setSuffix(" kN/m²")
+        self.perm_spin.setToolTip("Carichi permanenti non strutturali (G2)")
+        carichi_layout.addRow("Permanenti (G2):", self.perm_spin)
+
+        self.variabile_spin = QDoubleSpinBox()
+        self.variabile_spin.setRange(0.5, 10.0)
+        self.variabile_spin.setValue(2.0)
+        self.variabile_spin.setSuffix(" kN/m²")
+        self.variabile_spin.setToolTip("Carico variabile (Q) da categoria uso")
+        carichi_layout.addRow("Variabile (Q):", self.variabile_spin)
+
+        self.totale_label = QLabel("6.7 kN/m²")
+        self.totale_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+        carichi_layout.addRow("Totale:", self.totale_label)
+
+        self.peso_spin.valueChanged.connect(self.updateTotale)
+        self.perm_spin.valueChanged.connect(self.updateTotale)
+        self.variabile_spin.valueChanged.connect(self.updateTotale)
+
+        carichi_group.setLayout(carichi_layout)
+        layout.addWidget(carichi_group)
+
+        # Pulsanti
+        btn_layout = QHBoxLayout()
+        btn_annulla = QPushButton("Annulla")
+        btn_annulla.clicked.connect(self.reject)
+        btn_crea = QPushButton("Crea Solaio")
+        btn_crea.setStyleSheet("background-color: #0066cc; color: white; font-weight: bold; padding: 8px 20px;")
+        btn_crea.clicked.connect(self.creaSolaio)
+        btn_layout.addWidget(btn_annulla)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_crea)
+        layout.addLayout(btn_layout)
+
+    def onTipoChanged(self, idx):
+        nome, peso = self.tipo_combo.currentData()
+        self.peso_spin.setValue(peso)
+        self.tipo_desc.setText(self.TIPI_SOLAIO[idx][2])
+
+    def onCategoriaChanged(self, idx):
+        cat = self.categoria_combo.currentData()
+        self.variabile_spin.setValue(self.CARICHI_CATEGORIA.get(cat, 2.0))
+
+    def updateArea(self):
+        area = self.luce_spin.value() * self.larghezza_spin.value()
+        self.area_label.setText(f"{area:.1f} m²")
+
+    def updateTotale(self):
+        tot = self.peso_spin.value() + self.perm_spin.value() + self.variabile_spin.value()
+        self.totale_label.setText(f"{tot:.1f} kN/m²")
+
+    def creaSolaio(self):
+        n = len(self.progetto.solai) + 1
+        nome, _ = self.tipo_combo.currentData()
+
+        self.solaio_creato = Solaio(
+            nome=f"S{n}",
+            piano=self.piano_combo.currentData(),
+            tipo=nome,
+            luce=self.luce_spin.value(),
+            larghezza=self.larghezza_spin.value(),
+            peso_proprio=self.peso_spin.value(),
+            carico_variabile=self.variabile_spin.value(),
+            categoria_uso=self.categoria_combo.currentData()
+        )
+        self.accept()
+
+
+# ============================================================================
 # STEP SOLAI PANEL
 # ============================================================================
 
@@ -2486,6 +3073,11 @@ class StepSolaiPanel(QWidget):
         self.btn_aggiungi = QPushButton("➕ Aggiungi Solaio")
         self.btn_aggiungi.clicked.connect(self.aggiungiSolaio)
         toolbar.addWidget(self.btn_aggiungi)
+
+        self.btn_auto = QPushButton("⚡ Genera Automaticamente")
+        self.btn_auto.setToolTip("Crea un solaio per ogni piano")
+        self.btn_auto.clicked.connect(self.generaAutomatici)
+        toolbar.addWidget(self.btn_auto)
 
         toolbar.addStretch()
 
@@ -2527,6 +3119,21 @@ class StepSolaiPanel(QWidget):
         tipo_group.setLayout(tipo_layout)
         layout.addWidget(tipo_group)
 
+        # Sezione piani senza solaio
+        self.missing_group = QGroupBox("Piani senza solaio")
+        self.missing_group.setStyleSheet("""
+            QGroupBox { color: #c70000; font-weight: bold; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
+        """)
+        missing_layout = QVBoxLayout()
+        self.missing_list = QWidget()
+        self.missing_list_layout = QVBoxLayout(self.missing_list)
+        self.missing_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.missing_list_layout.setSpacing(4)
+        missing_layout.addWidget(self.missing_list)
+        self.missing_group.setLayout(missing_layout)
+        layout.addWidget(self.missing_group)
+
         # Riepilogo
         self.summary = QLabel("")
         self.summary.setStyleSheet("padding: 10px; background: #f8f9fa; border-radius: 5px;")
@@ -2535,6 +3142,7 @@ class StepSolaiPanel(QWidget):
         # Pulsanti navigazione
         btn_layout = QHBoxLayout()
         btn_indietro = QPushButton("← Indietro")
+        btn_indietro.clicked.connect(lambda: self.parent().goToStep(WorkflowStep.CORDOLI))
         btn_layout.addWidget(btn_indietro)
         btn_layout.addStretch()
         self.btn_avanti = QPushButton("Avanti → Carichi")
@@ -2557,18 +3165,122 @@ class StepSolaiPanel(QWidget):
             self.table.setItem(i, 6, QTableWidgetItem(f"{s.carico_variabile:.1f}"))
             self.table.setItem(i, 7, QTableWidgetItem(s.categoria_uso))
 
+        # Aggiorna lista piani senza solaio
+        self._updateMissingFloors()
+
         # Riepilogo
         n = len(self.progetto.solai)
         area_tot = sum(s.area for s in self.progetto.solai)
         carico_tot = sum(s.carico_totale * s.area for s in self.progetto.solai)
         self.summary.setText(f"📊 Totale: {n} solai | Area: {area_tot:.1f} m² | Carico: {carico_tot:.0f} kN")
 
-    def aggiungiSolaio(self):
+    def _updateMissingFloors(self):
+        """Aggiorna lista piani senza solaio"""
+        # Pulisci layout esistente
+        while self.missing_list_layout.count():
+            item = self.missing_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Trova piani senza solaio
+        piani_con_solaio = {s.piano for s in self.progetto.solai}
+        piani_mancanti = [p for p in self.progetto.piani if p.numero not in piani_con_solaio]
+
+        if not piani_mancanti:
+            self.missing_group.hide()
+            return
+
+        self.missing_group.show()
+        self.missing_group.setTitle(f"Piani senza solaio ({len(piani_mancanti)})")
+
+        for piano in piani_mancanti:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(5, 2, 5, 2)
+
+            label = QLabel(f"{piano.nome} - Quota: {piano.quota:.2f}m, H={piano.altezza:.2f}m")
+            label.setStyleSheet("color: #333;")
+            row_layout.addWidget(label, 1)
+
+            btn_add = QPushButton("+ Aggiungi")
+            btn_add.setFixedWidth(90)
+            btn_add.setStyleSheet("""
+                QPushButton {
+                    background-color: #28a745;
+                    color: white;
+                    border-radius: 3px;
+                    padding: 3px 8px;
+                }
+                QPushButton:hover { background-color: #218838; }
+            """)
+            btn_add.clicked.connect(lambda checked, p=piano: self._quickAddSolaio(p))
+            row_layout.addWidget(btn_add)
+
+            self.missing_list_layout.addWidget(row)
+
+    def _quickAddSolaio(self, piano):
+        """Aggiunge solaio automatico per un piano specifico"""
         n = len(self.progetto.solai) + 1
-        piano = 0 if not self.progetto.piani else self.progetto.piani[0].numero
-        solaio = Solaio(f"S{n}", piano)
+        solaio = Solaio(
+            nome=f"S{n}",
+            piano=piano.numero,
+            tipo="Laterocemento 20+5",
+            luce=5.0,
+            larghezza=5.0,
+            peso_proprio=3.2,
+            carico_variabile=2.0,
+            categoria_uso="A"
+        )
         self.progetto.solai.append(solaio)
         self.refresh()
+        # Notifica la modifica
+        main_win = self.window()
+        if hasattr(main_win, 'setModificato'):
+            main_win.setModificato(True)
+
+    def aggiungiSolaio(self):
+        """Apre dialogo per inserire nuovo solaio"""
+        piano_default = 0
+        if self.progetto.piani:
+            # Trova primo piano senza solaio
+            piani_con_solaio = {s.piano for s in self.progetto.solai}
+            for p in self.progetto.piani:
+                if p.numero not in piani_con_solaio:
+                    piano_default = p.numero
+                    break
+
+        dlg = DialogoSolaio(self.progetto, piano=piano_default, parent=self)
+        if dlg.exec_() == QDialog.Accepted and dlg.solaio_creato:
+            self.progetto.solai.append(dlg.solaio_creato)
+            self.refresh()
+            # Notifica la modifica
+            main_win = self.window()
+            if hasattr(main_win, 'setModificato'):
+                main_win.setModificato(True)
+
+    def generaAutomatici(self):
+        """Genera solai automatici per tutti i piani senza solaio"""
+        piani_con_solaio = {s.piano for s in self.progetto.solai}
+        nuovi = 0
+
+        for piano in self.progetto.piani:
+            if piano.numero not in piani_con_solaio:
+                n = len(self.progetto.solai) + 1
+                solaio = Solaio(
+                    nome=f"S{n}",
+                    piano=piano.numero,
+                    tipo="Laterocemento 20+5",
+                    luce=5.0,
+                    larghezza=5.0,
+                    peso_proprio=3.2,
+                    carico_variabile=2.0,
+                    categoria_uso="A"
+                )
+                self.progetto.solai.append(solaio)
+                nuovi += 1
+
+        self.refresh()
+        QMessageBox.information(self, "Solai Generati", f"Creati {nuovi} solai automatici")
 
     def eliminaSolaio(self):
         row = self.table.currentRow()
@@ -2720,6 +3432,7 @@ class StepCarichiPanel(QWidget):
         # Pulsanti navigazione
         btn_layout = QHBoxLayout()
         btn_indietro = QPushButton("← Indietro")
+        btn_indietro.clicked.connect(lambda: self.parent().goToStep(WorkflowStep.SOLAI))
         btn_layout.addWidget(btn_indietro)
         btn_layout.addStretch()
         self.btn_avanti = QPushButton("Avanti → Materiali")
@@ -3592,6 +4305,7 @@ class DrawingCanvas(QWidget):
     muroAggiunto = pyqtSignal(Muro)
     selectionChanged = pyqtSignal(object)
     muriChanged = pyqtSignal()
+    requestApertura = pyqtSignal(str, float)  # nome_muro, posizione
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3702,14 +4416,24 @@ class DrawingCanvas(QWidget):
 
         # Muri
         if self.progetto:
+            z_piano_corrente = self.piano_corrente * (self.progetto.altezza_piano if self.progetto else 3.0)
+
+            # Prima disegna muri di piani adiacenti (ghost/sfumato)
+            painter.setOpacity(0.2)
             for muro in self.progetto.muri:
-                if muro.z == self.piano_corrente * (self.progetto.altezza_piano if self.progetto else 3.0):
+                if abs(muro.z - z_piano_corrente) > 0.1:  # Altro piano
+                    self.drawMuroGhost(painter, muro)
+            painter.setOpacity(1.0)
+
+            # Poi disegna muri del piano corrente
+            for muro in self.progetto.muri:
+                if abs(muro.z - z_piano_corrente) <= 0.1:  # Piano corrente
                     self.drawMuro(painter, muro)
 
-            # Aperture
+            # Aperture solo del piano corrente
             for ap in self.progetto.aperture:
                 muro = next((m for m in self.progetto.muri if m.nome == ap.muro), None)
-                if muro:
+                if muro and abs(muro.z - z_piano_corrente) <= 0.1:
                     self.drawApertura(painter, ap, muro)
 
         # Muro in corso di disegno
@@ -3767,6 +4491,15 @@ class DrawingCanvas(QWidget):
         painter.drawLine(sx0, sy0, sx0, sy1)
         painter.drawText(sx0 + 5, sy1 - 5, "Y")
 
+    def drawMuroGhost(self, painter, muro: Muro):
+        """Disegna muro ghost (altri piani) in modo semplificato"""
+        x1, y1 = self.worldToScreen(muro.x1, muro.y1)
+        x2, y2 = self.worldToScreen(muro.x2, muro.y2)
+
+        painter.setPen(QPen(QColor(150, 150, 150), 1, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+
     def drawMuro(self, painter, muro: Muro):
         x1, y1 = self.worldToScreen(muro.x1, muro.y1)
         x2, y2 = self.worldToScreen(muro.x2, muro.y2)
@@ -3785,24 +4518,68 @@ class DrawingCanvas(QWidget):
             color = QColor(100, 150, 255)
 
         # Calcola spessore in pixel
-        spessore_px = max(muro.spessore * self.scala, 4)
+        spessore_px = max(muro.spessore * self.scala, 6)
 
-        # Disegna muro
+        # Trova aperture su questo muro
+        aperture_muro = [ap for ap in self.progetto.aperture if ap.muro == muro.nome]
+
+        # Calcola segmenti del muro (con tagli per aperture)
+        dx_world = muro.x2 - muro.x1
+        dy_world = muro.y2 - muro.y1
+        length_world = math.sqrt(dx_world*dx_world + dy_world*dy_world)
+
+        if length_world == 0:
+            return
+
+        # Direzione normalizzata
+        ux, uy = dx_world / length_world, dy_world / length_world
+
+        # Crea lista di segmenti (start, end) in coordinate lungo il muro
+        segments = [(0, length_world)]
+
+        # Taglia i segmenti per ogni apertura
+        for ap in sorted(aperture_muro, key=lambda a: a.posizione):
+            ap_start = ap.posizione
+            ap_end = ap.posizione + ap.larghezza
+            new_segments = []
+            for seg_start, seg_end in segments:
+                if ap_end <= seg_start or ap_start >= seg_end:
+                    # Nessuna sovrapposizione
+                    new_segments.append((seg_start, seg_end))
+                else:
+                    # Sovrapposizione - taglia
+                    if ap_start > seg_start:
+                        new_segments.append((seg_start, ap_start))
+                    if ap_end < seg_end:
+                        new_segments.append((ap_end, seg_end))
+            segments = new_segments
+
+        # Disegna i segmenti del muro
         painter.setPen(QPen(QColor(80, 60, 40), 1))
         painter.setBrush(QBrush(color))
 
-        # Calcola rettangolo del muro
         dx, dy = x2 - x1, y2 - y1
-        length = math.sqrt(dx*dx + dy*dy)
-        if length > 0:
-            nx, ny = -dy/length * spessore_px/2, dx/length * spessore_px/2
-            points = [
-                QPointF(x1 - nx, y1 - ny),
-                QPointF(x1 + nx, y1 + ny),
-                QPointF(x2 + nx, y2 + ny),
-                QPointF(x2 - nx, y2 - ny),
-            ]
-            painter.drawPolygon(*points)
+        length_px = math.sqrt(dx*dx + dy*dy)
+        if length_px > 0:
+            nx, ny = -dy/length_px * spessore_px/2, dx/length_px * spessore_px/2
+
+            for seg_start, seg_end in segments:
+                # Calcola punti in coordinate schermo
+                t1 = seg_start / length_world
+                t2 = seg_end / length_world
+
+                sx1 = x1 + dx * t1
+                sy1 = y1 + dy * t1
+                sx2 = x1 + dx * t2
+                sy2 = y1 + dy * t2
+
+                points = [
+                    QPointF(sx1 - nx, sy1 - ny),
+                    QPointF(sx1 + nx, sy1 + ny),
+                    QPointF(sx2 + nx, sy2 + ny),
+                    QPointF(sx2 - nx, sy2 - ny),
+                ]
+                painter.drawPolygon(*points)
 
         # Etichetta
         mx, my = (x1 + x2) / 2, (y1 + y2) / 2
@@ -3812,30 +4589,111 @@ class DrawingCanvas(QWidget):
         painter.drawText(int(mx) - 20, int(my) + 10, f"{muro.lunghezza:.2f}m")
 
     def drawApertura(self, painter, ap: Apertura, muro: Muro):
-        # Calcola posizione apertura sul muro
+        """Disegna apertura con simbolo architettonico"""
         dx = muro.x2 - muro.x1
         dy = muro.y2 - muro.y1
         length = math.sqrt(dx*dx + dy*dy)
         if length == 0:
             return
 
-        # Punto medio apertura
-        t = (ap.posizione + ap.larghezza/2) / length
-        ax = muro.x1 + dx * t
-        ay = muro.y1 + dy * t
+        # Calcola spessore muro in pixel
+        spessore_px = max(muro.spessore * self.scala, 6)
 
-        sx, sy = self.worldToScreen(ax, ay)
+        # Calcola posizioni lungo il muro
+        t1 = ap.posizione / length
+        t2 = (ap.posizione + ap.larghezza) / length
 
-        # Disegna simbolo
-        size = int(ap.larghezza * self.scala / 2)
-        if ap.tipo == "finestra":
-            painter.setPen(QPen(QColor(0, 100, 200), 2))
-            painter.setBrush(QBrush(QColor(150, 200, 255, 150)))
+        # Punti inizio e fine apertura in world coords
+        ax1 = muro.x1 + dx * t1
+        ay1 = muro.y1 + dy * t1
+        ax2 = muro.x1 + dx * t2
+        ay2 = muro.y1 + dy * t2
+
+        # Converti in screen coords
+        sx1, sy1 = self.worldToScreen(ax1, ay1)
+        sx2, sy2 = self.worldToScreen(ax2, ay2)
+
+        # Calcola normale al muro
+        adx, ady = sx2 - sx1, sy2 - sy1
+        alen = math.sqrt(adx*adx + ady*ady)
+        if alen > 0:
+            anx, any = -ady/alen * spessore_px/2, adx/alen * spessore_px/2
         else:
-            painter.setPen(QPen(QColor(100, 60, 20), 2))
-            painter.setBrush(QBrush(QColor(180, 140, 100, 150)))
+            anx, any = 0, spessore_px/2
 
-        painter.drawRect(sx - size, sy - size//2, size*2, size)
+        if ap.tipo == "finestra":
+            # Finestra: rettangolo azzurro con croce
+            painter.setPen(QPen(QColor(0, 120, 200), 2))
+            painter.setBrush(QBrush(QColor(173, 216, 230, 180)))  # Light blue
+
+            # Rettangolo apertura
+            points = [
+                QPointF(sx1 - anx, sy1 - any),
+                QPointF(sx1 + anx, sy1 + any),
+                QPointF(sx2 + anx, sy2 + any),
+                QPointF(sx2 - anx, sy2 - any),
+            ]
+            painter.drawPolygon(*points)
+
+            # Croce finestra
+            painter.setPen(QPen(QColor(0, 80, 150), 1))
+            cmx, cmy = (sx1 + sx2) / 2, (sy1 + sy2) / 2
+            painter.drawLine(int(sx1), int(sy1), int(sx2), int(sy2))
+            painter.drawLine(int(cmx - anx), int(cmy - any), int(cmx + anx), int(cmy + any))
+
+        elif ap.tipo == "porta":
+            # Porta: apertura con arco di battente
+            painter.setPen(QPen(QColor(139, 90, 43), 2))
+            painter.setBrush(QBrush(QColor(255, 255, 255, 200)))
+
+            # Rettangolo apertura bianco (vano)
+            points = [
+                QPointF(sx1 - anx, sy1 - any),
+                QPointF(sx1 + anx, sy1 + any),
+                QPointF(sx2 + anx, sy2 + any),
+                QPointF(sx2 - anx, sy2 - any),
+            ]
+            painter.drawPolygon(*points)
+
+            # Arco battente porta (90 gradi)
+            painter.setPen(QPen(QColor(139, 90, 43), 1, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            arc_radius = int(alen * 0.9)
+            arc_rect = QRectF(sx1 - arc_radius, sy1 - arc_radius, arc_radius * 2, arc_radius * 2)
+            # Calcola angolo di partenza basato sulla direzione del muro
+            start_angle = int(math.degrees(math.atan2(-ady, adx)) * 16)
+            painter.drawArc(arc_rect, start_angle, 90 * 16)
+
+            # Linea porta
+            painter.setPen(QPen(QColor(139, 90, 43), 2))
+            painter.drawLine(int(sx1), int(sy1),
+                           int(sx1 + arc_radius * math.cos(math.radians(start_angle/16 + 45))),
+                           int(sy1 - arc_radius * math.sin(math.radians(start_angle/16 + 45))))
+
+        else:  # porta-finestra
+            # Porta-finestra: combinazione
+            painter.setPen(QPen(QColor(0, 100, 150), 2))
+            painter.setBrush(QBrush(QColor(200, 230, 255, 180)))
+
+            points = [
+                QPointF(sx1 - anx, sy1 - any),
+                QPointF(sx1 + anx, sy1 + any),
+                QPointF(sx2 + anx, sy2 + any),
+                QPointF(sx2 - anx, sy2 - any),
+            ]
+            painter.drawPolygon(*points)
+
+            # Divisione verticale
+            painter.setPen(QPen(QColor(0, 80, 120), 1))
+            cmx, cmy = (sx1 + sx2) / 2, (sy1 + sy2) / 2
+            painter.drawLine(int(cmx - anx), int(cmy - any), int(cmx + anx), int(cmy + any))
+
+        # Etichetta apertura
+        painter.setPen(QPen(QColor(50, 50, 50)))
+        painter.setFont(QFont("Arial", 7))
+        lx, ly = (sx1 + sx2) / 2, (sy1 + sy2) / 2
+        label = f"{ap.larghezza:.0f}x{ap.altezza:.0f}"
+        painter.drawText(int(lx) - 15, int(ly) + 4, label)
 
     def drawTempMuro(self, painter):
         x1, y1 = self.worldToScreen(self.punto_inizio[0], self.punto_inizio[1])
@@ -3879,9 +4737,10 @@ class DrawingCanvas(QWidget):
             'select': '🔍 Seleziona',
             'muro': '🧱 Disegna Muro',
             'rettangolo': '⬜ Disegna Rettangolo',
-            'apertura': '🚪 Aggiungi Apertura',
+            'apertura': '🚪 Clicca su muro per apertura',
             'misura': '📏 Misura Distanza',
-            'pan': '✋ Sposta Vista'
+            'pan': '✋ Sposta Vista',
+            'polygon': '⬠ Disegna Poligono',
         }
 
         painter.drawText(10, 20, f"Strumento: {tool_names.get(self.strumento, self.strumento)}")
@@ -3949,6 +4808,12 @@ class DrawingCanvas(QWidget):
 
             elif self.strumento == 'select':
                 self.selectAt(wx, wy, multi=ctrl_pressed)
+
+            elif self.strumento == 'apertura':
+                # Trova muro più vicino e posizione
+                muro, posizione = self.findWallAtPoint(wx, wy)
+                if muro:
+                    self.requestApertura.emit(muro.nome, posizione)
 
         elif event.button() == Qt.RightButton:
             # Annulla operazione corrente
@@ -4053,6 +4918,39 @@ class DrawingCanvas(QWidget):
         proj_x = x1 + t * dx
         proj_y = y1 + t * dy
         return math.sqrt((px-proj_x)**2 + (py-proj_y)**2)
+
+    def findWallAtPoint(self, wx: float, wy: float):
+        """Trova il muro più vicino al punto e la posizione lungo il muro.
+        Returns: (Muro, posizione) o (None, 0)
+        """
+        if not self.progetto:
+            return None, 0
+
+        best_muro = None
+        best_dist = float('inf')
+        best_pos = 0
+
+        for muro in self.progetto.muri:
+            # Solo muri del piano corrente
+            z_piano = self.piano_corrente * (self.progetto.altezza_piano if self.progetto else 3.0)
+            if abs(muro.z - z_piano) > 0.1:
+                continue
+
+            dist = self.pointToSegmentDist(wx, wy, muro.x1, muro.y1, muro.x2, muro.y2)
+            if dist < best_dist and dist < 1.0:  # 1m di tolleranza
+                best_dist = dist
+                best_muro = muro
+
+                # Calcola posizione lungo il muro
+                dx, dy = muro.x2 - muro.x1, muro.y2 - muro.y1
+                length = math.sqrt(dx*dx + dy*dy)
+                if length > 0:
+                    t = max(0, min(1, ((wx-muro.x1)*dx + (wy-muro.y1)*dy) / (dx*dx + dy*dy)))
+                    best_pos = t * length
+                else:
+                    best_pos = 0
+
+        return best_muro, best_pos
 
     # ========== STRUMENTO RETTANGOLO ==========
 
@@ -5046,12 +5944,50 @@ class MuraturaEditorV2(QMainWindow):
         self.step_piani.btn_avanti.clicked.connect(lambda: self.goToStep(WorkflowStep.GEOMETRIA))
         self.content_stack.addWidget(self.step_piani)
 
-        # Canvas (per step geometria e aperture)
+        # Canvas (per step geometria e aperture) - con navigazione
+        self.canvas_container = QWidget()
+        canvas_layout = QVBoxLayout(self.canvas_container)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(0)
+
         self.canvas = DrawingCanvas()
         self.canvas.setProgetto(self.progetto)
         self.canvas.muroAggiunto.connect(self.onMuroAggiunto)
         self.canvas.selectionChanged.connect(self.onSelectionChanged)
-        self.content_stack.addWidget(self.canvas)
+        self.canvas.requestApertura.connect(self.onRequestApertura)
+        canvas_layout.addWidget(self.canvas, 1)  # stretch=1
+
+        # Barra di navigazione per canvas
+        self.canvas_nav = QWidget()
+        self.canvas_nav.setFixedHeight(50)
+        self.canvas_nav.setStyleSheet("""
+            QWidget { background-color: #f5f5f5; border-top: 1px solid #ddd; }
+            QPushButton { padding: 8px 20px; font-size: 13px; border-radius: 4px; }
+            QPushButton#btn_indietro { background-color: #6c757d; color: white; }
+            QPushButton#btn_indietro:hover { background-color: #5a6268; }
+            QPushButton#btn_avanti { background-color: #0066cc; color: white; font-weight: bold; }
+            QPushButton#btn_avanti:hover { background-color: #0052a3; }
+        """)
+        nav_layout = QHBoxLayout(self.canvas_nav)
+        nav_layout.setContentsMargins(15, 8, 15, 8)
+
+        self.canvas_btn_indietro = QPushButton("← Indietro")
+        self.canvas_btn_indietro.setObjectName("btn_indietro")
+        self.canvas_btn_indietro.clicked.connect(self.canvasIndietro)
+        nav_layout.addWidget(self.canvas_btn_indietro)
+
+        self.canvas_step_label = QLabel("GEOMETRIA - Disegno Muri")
+        self.canvas_step_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #333;")
+        self.canvas_step_label.setAlignment(Qt.AlignCenter)
+        nav_layout.addWidget(self.canvas_step_label, 1)
+
+        self.canvas_btn_avanti = QPushButton("Avanti →")
+        self.canvas_btn_avanti.setObjectName("btn_avanti")
+        self.canvas_btn_avanti.clicked.connect(self.canvasAvanti)
+        nav_layout.addWidget(self.canvas_btn_avanti)
+
+        canvas_layout.addWidget(self.canvas_nav)
+        self.content_stack.addWidget(self.canvas_container)
 
         # Step Fondazioni
         self.step_fondazioni = StepFondazioniPanel(self.progetto)
@@ -5143,7 +6079,9 @@ class MuraturaEditorV2(QMainWindow):
         self.btn_rettangolo.clicked.connect(lambda: self.canvas.setStrumento('rettangolo'))
         tools_panel.addButton(self.btn_rettangolo)
         self.btn_apertura = RibbonButton("Apertura")
-        self.btn_apertura.clicked.connect(self.aggiungiApertura)
+        self.btn_apertura.setCheckable(True)
+        self.btn_apertura.setToolTip("Clicca su un muro per inserire apertura")
+        self.btn_apertura.clicked.connect(lambda: self.canvas.setStrumento('apertura'))
         tools_panel.addButton(self.btn_apertura)
         self.btn_polygon = RibbonButton("Poligono")
         self.btn_polygon.setCheckable(True)
@@ -5151,6 +6089,48 @@ class MuraturaEditorV2(QMainWindow):
         self.btn_polygon.clicked.connect(lambda: self.canvas.setStrumento('polygon'))
         tools_panel.addButton(self.btn_polygon)
         home_tab.addPanel(tools_panel)
+
+        # Pannello Piano
+        piano_panel = RibbonPanel("Piano")
+        btn_piano_su = RibbonButton("▲")
+        btn_piano_su.setToolTip("Piano superiore")
+        btn_piano_su.setFixedWidth(40)
+        btn_piano_su.clicked.connect(self.pianoSu)
+        piano_panel.addButton(btn_piano_su)
+
+        self.piano_label = QLabel("Piano 0")
+        self.piano_label.setAlignment(Qt.AlignCenter)
+        self.piano_label.setStyleSheet("""
+            QLabel {
+                font-size: 12px;
+                font-weight: bold;
+                color: #0066cc;
+                background-color: #e8f4fc;
+                border: 1px solid #0066cc;
+                border-radius: 4px;
+                padding: 5px 10px;
+                min-width: 70px;
+            }
+        """)
+        piano_panel.addWidget(self.piano_label)
+
+        btn_piano_giu = RibbonButton("▼")
+        btn_piano_giu.setToolTip("Piano inferiore")
+        btn_piano_giu.setFixedWidth(40)
+        btn_piano_giu.clicked.connect(self.pianoGiu)
+        piano_panel.addButton(btn_piano_giu)
+
+        btn_aggiungi_piano = RibbonButton("+Piano")
+        btn_aggiungi_piano.setToolTip("Aggiungi nuovo piano")
+        btn_aggiungi_piano.clicked.connect(self.aggiungiPiano)
+        piano_panel.addButton(btn_aggiungi_piano)
+
+        btn_copia_piano = RibbonButton("Copia")
+        btn_copia_piano.setToolTip("Copia elementi da altro piano")
+        btn_copia_piano.clicked.connect(self.copiaPiano)
+        piano_panel.addButton(btn_copia_piano)
+
+        home_tab.addPanel(piano_panel)
 
         # Pannello strumenti avanzati
         adv_panel = RibbonPanel("Avanzati")
@@ -5435,8 +6415,15 @@ GUIDA RAPIDA - MURATURA v2.0
             self.step_piani.refresh()
             self.content_stack.setCurrentWidget(self.step_piani)
         elif step in [WorkflowStep.GEOMETRIA, WorkflowStep.APERTURE]:
-            self.content_stack.setCurrentWidget(self.canvas)
-            if step == WorkflowStep.APERTURE:
+            self.content_stack.setCurrentWidget(self.canvas_container)
+            if step == WorkflowStep.GEOMETRIA:
+                self.canvas_step_label.setText("GEOMETRIA - Disegno Muri")
+                self.canvas_btn_indietro.setText("← Piani")
+                self.canvas_btn_avanti.setText("Aperture →")
+            else:  # APERTURE
+                self.canvas_step_label.setText("APERTURE - Porte e Finestre")
+                self.canvas_btn_indietro.setText("← Geometria")
+                self.canvas_btn_avanti.setText("Fondazioni →")
                 self.canvas.setStrumento('select')  # Per selezionare muri
         elif step == WorkflowStep.FONDAZIONI:
             self.step_fondazioni.refresh()
@@ -5462,6 +6449,188 @@ GUIDA RAPIDA - MURATURA v2.0
         self.browser.updateFromProject(self.progetto)
 
         self.step_progress.setText(f"Step: {STEP_NAMES[step]}")
+
+    def onRequestApertura(self, nome_muro: str, posizione: float):
+        """Chiamato quando l'utente clicca su un muro con lo strumento apertura"""
+        dlg = DialogoApertura(self.progetto, nome_muro, self)
+        # Pre-imposta la posizione
+        dlg.posizione_spin.setValue(posizione)
+        if dlg.exec_() == QDialog.Accepted and dlg.apertura_creata:
+            self.progetto.aperture.append(dlg.apertura_creata)
+            self.browser.updateFromProject(self.progetto)
+            self.canvas.update()
+            self.status_label.setText(f"Aggiunta apertura: {dlg.apertura_creata.nome}")
+
+    # ========================================================================
+    # NAVIGAZIONE CANVAS
+    # ========================================================================
+
+    def canvasIndietro(self):
+        """Naviga indietro dalla schermata canvas"""
+        if self.progetto.current_step == WorkflowStep.GEOMETRIA:
+            self.goToStep(WorkflowStep.PIANI)
+        elif self.progetto.current_step == WorkflowStep.APERTURE:
+            self.goToStep(WorkflowStep.GEOMETRIA)
+
+    def canvasAvanti(self):
+        """Naviga avanti dalla schermata canvas"""
+        if self.progetto.current_step == WorkflowStep.GEOMETRIA:
+            self.goToStep(WorkflowStep.APERTURE)
+        elif self.progetto.current_step == WorkflowStep.APERTURE:
+            self.goToStep(WorkflowStep.FONDAZIONI)
+
+    # ========================================================================
+    # GESTIONE PIANI
+    # ========================================================================
+
+    def pianoSu(self):
+        """Vai al piano superiore"""
+        max_piano = len(self.progetto.piani) - 1
+        if self.canvas.piano_corrente < max_piano:
+            self.canvas.piano_corrente += 1
+            self.updatePianoLabel()
+            self.canvas.update()
+            self.status_label.setText(f"Piano {self.canvas.piano_corrente}")
+
+    def pianoGiu(self):
+        """Vai al piano inferiore"""
+        if self.canvas.piano_corrente > 0:
+            self.canvas.piano_corrente -= 1
+            self.updatePianoLabel()
+            self.canvas.update()
+            self.status_label.setText(f"Piano {self.canvas.piano_corrente}")
+
+    def aggiungiPiano(self):
+        """Aggiunge un nuovo piano al progetto"""
+        n = len(self.progetto.piani)
+        if n >= 10:
+            QMessageBox.warning(self, "Avviso", "Massimo 10 piani supportati")
+            return
+
+        # Calcola quota del nuovo piano
+        ultima_quota = self.progetto.piani[-1].quota if self.progetto.piani else 0
+        ultima_altezza = self.progetto.piani[-1].altezza if self.progetto.piani else 3.0
+        nuova_quota = ultima_quota + ultima_altezza
+
+        nuovo_piano = Piano(
+            numero=n,
+            nome=f"Piano {n}",
+            quota=nuova_quota,
+            altezza=self.progetto.altezza_piano
+        )
+        self.progetto.piani.append(nuovo_piano)
+        self.progetto.n_piani = len(self.progetto.piani)
+
+        # Vai al nuovo piano
+        self.canvas.piano_corrente = n
+        self.updatePianoLabel()
+        self.canvas.update()
+        self.browser.updateFromProject(self.progetto)
+        self.status_label.setText(f"Aggiunto Piano {n}")
+
+    def updatePianoLabel(self):
+        """Aggiorna l'etichetta del piano corrente"""
+        piano = self.canvas.piano_corrente
+        n_piani = len(self.progetto.piani)
+        nome = self.progetto.piani[piano].nome if piano < n_piani else f"Piano {piano}"
+        self.piano_label.setText(f"{nome}")
+        self.piano_label.setToolTip(f"Piano {piano} di {n_piani} - Quota: {self.progetto.piani[piano].quota:.2f}m" if piano < n_piani else "")
+
+    def copiaPiano(self):
+        """Copia muri e aperture da un piano all'altro"""
+        if len(self.progetto.piani) < 2:
+            QMessageBox.warning(self, "Avviso", "Aggiungi almeno un altro piano prima di copiare")
+            return
+
+        piano_dest = self.canvas.piano_corrente
+        if piano_dest >= len(self.progetto.piani):
+            QMessageBox.warning(self, "Avviso", "Piano destinazione non valido")
+            return
+
+        # Crea lista piani sorgente (escludi destinazione)
+        piani_disponibili = [p for p in self.progetto.piani if p.numero != piano_dest]
+        if not piani_disponibili:
+            QMessageBox.warning(self, "Avviso", "Nessun piano da cui copiare")
+            return
+
+        # Dialog selezione piano sorgente
+        items = [f"{p.nome} (Piano {p.numero})" for p in piani_disponibili]
+        item, ok = QInputDialog.getItem(
+            self, "Copia Piano",
+            f"Copia elementi verso {self.progetto.piani[piano_dest].nome}:\n\nSeleziona piano sorgente:",
+            items, 0, False
+        )
+        if not ok:
+            return
+
+        # Trova piano sorgente selezionato
+        idx = items.index(item)
+        piano_src = piani_disponibili[idx].numero
+        quota_src = self.progetto.piani[piano_src].quota
+        quota_dest = self.progetto.piani[piano_dest].quota
+
+        # Conta elementi nel piano sorgente
+        muri_src = [m for m in self.progetto.muri if abs(m.z - quota_src) < 0.1]
+        if not muri_src:
+            QMessageBox.information(self, "Info", f"Il piano sorgente non ha muri da copiare")
+            return
+
+        # Chiedi conferma
+        msg = f"Copiare {len(muri_src)} muri dal Piano {piano_src} al Piano {piano_dest}?\n"
+        aperture_src = []
+        for m in muri_src:
+            aperture_src.extend([a for a in self.progetto.aperture if a.muro == m.nome])
+        if aperture_src:
+            msg += f"Verranno copiate anche {len(aperture_src)} aperture."
+
+        reply = QMessageBox.question(self, "Conferma Copia", msg,
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        # Esegui copia muri
+        muri_copiati = 0
+        mappa_nomi = {}  # vecchio_nome -> nuovo_nome
+        for muro in muri_src:
+            n = len(self.progetto.muri) + 1
+            nuovo_nome = f"M{n}"
+            nuovo_muro = Muro(
+                nome=nuovo_nome,
+                x1=muro.x1, y1=muro.y1,
+                x2=muro.x2, y2=muro.y2,
+                spessore=muro.spessore,
+                altezza=muro.altezza,
+                z=quota_dest,
+                materiale=muro.materiale
+            )
+            self.progetto.muri.append(nuovo_muro)
+            mappa_nomi[muro.nome] = nuovo_nome
+            muri_copiati += 1
+
+        # Copia aperture associate
+        aperture_copiate = 0
+        for ap in aperture_src:
+            if ap.muro in mappa_nomi:
+                n = len(self.progetto.aperture) + 1
+                nuova_ap = Apertura(
+                    nome=f"A{n}",
+                    muro=mappa_nomi[ap.muro],
+                    tipo=ap.tipo,
+                    larghezza=ap.larghezza,
+                    altezza=ap.altezza,
+                    posizione=ap.posizione,
+                    quota=ap.quota
+                )
+                self.progetto.aperture.append(nuova_ap)
+                aperture_copiate += 1
+
+        # Aggiorna interfaccia
+        self.canvas.update()
+        self.browser.updateFromProject(self.progetto)
+        self.setModificato(True)
+        self.status_label.setText(f"Copiati {muri_copiati} muri e {aperture_copiate} aperture")
+        QMessageBox.information(self, "Copia Completata",
+                               f"Copiati nel Piano {piano_dest}:\n• {muri_copiati} muri\n• {aperture_copiate} aperture")
 
     def aggiungiApertura(self):
         """Apre il dialogo per aggiungere un'apertura"""
