@@ -18,6 +18,7 @@ import math
 import json
 import socket
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
@@ -37,12 +38,19 @@ from PyQt5.QtWidgets import (
     QSizePolicy, QProgressBar, QCheckBox, QMenu, QSlider,
     QUndoStack, QUndoCommand, QShortcut
 )
-from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QSize, QTimer, QByteArray
+from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QSize, QTimer, QByteArray, QThread
 from PyQt5.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QWheelEvent,
     QMouseEvent, QPainterPath, QKeyEvent, QIcon, QPixmap,
     QKeySequence, QImage, QLinearGradient, QRadialGradient
 )
+
+# Import SVG support
+try:
+    from PyQt5.QtSvg import QSvgRenderer
+    SVG_AVAILABLE = True
+except ImportError:
+    SVG_AVAILABLE = False
 
 # Import librerie export
 try:
@@ -50,6 +58,30 @@ try:
     DXF_AVAILABLE = True
 except ImportError:
     DXF_AVAILABLE = False
+
+# Import Shapely per geometria 2D e spatial indexing
+try:
+    from shapely.geometry import LineString, Point, Polygon
+    from shapely.strtree import STRtree
+    import numpy as np
+    SHAPELY_AVAILABLE = True
+except ImportError:
+    SHAPELY_AVAILABLE = False
+
+# Import mathutils (da Blender) per trasformazioni 3D
+try:
+    from mathutils import Vector, Matrix, Quaternion
+    MATHUTILS_AVAILABLE = True
+except ImportError:
+    MATHUTILS_AVAILABLE = False
+
+# Import ModernGL per GPU rendering
+try:
+    import moderngl
+    from PyQt5.QtOpenGL import QGLWidget
+    MODERNGL_AVAILABLE = True
+except ImportError:
+    MODERNGL_AVAILABLE = False
 
 try:
     from reportlab.lib.pagesizes import A4
@@ -550,6 +582,406 @@ class ThemeManager:
                 border-radius: 3px;
             }}
         """
+
+
+# ============================================================================
+# ICON MANAGER - Gestione centralizzata icone professionali
+# ============================================================================
+
+class IconManager:
+    """Gestore centralizzato delle icone con supporto temi e cache"""
+
+    _cache = {}
+    _resources_path = None
+
+    # Mapping emoji -> nome icona
+    EMOJI_TO_ICON = {
+        '📁': ('navigation', 'folder'),
+        '📐': ('navigation', 'floors'),
+        '🧱': ('elements', 'wall'),
+        '🚪': ('elements', 'door'),
+        '🏗️': ('elements', 'foundation'),
+        '🔗': ('elements', 'chain'),
+        '⛓️': ('elements', 'tie'),
+        '▭': ('elements', 'slab'),
+        '🪜': ('elements', 'stairs'),
+        '🏠': ('elements', 'roof'),
+        '⬇': ('elements', 'load'),
+        '📊': ('misc', 'chart'),
+        '📄': ('actions', 'file-new'),
+        '📂': ('actions', 'folder-open'),
+        '💾': ('actions', 'save'),
+        '🚀': ('misc', 'rocket'),
+        '❓': ('misc', 'help-circle'),
+        '📋': ('misc', 'list'),
+        '✓': ('status', 'check-circle'),
+        '✗': ('status', 'x-circle'),
+        '⚠': ('status', 'alert-triangle'),
+        '▶': ('misc', 'play'),
+        '🔬': ('misc', 'chart'),
+        '⚙️': ('misc', 'settings'),
+        '🌍': ('misc', 'globe'),
+        '🔍': ('navigation', 'zoom-in'),
+        '⬜': ('tools', 'rectangle'),
+        '📏': ('tools', 'measure'),
+        '✋': ('tools', 'hand'),
+        '⬠': ('tools', 'polygon'),
+        '🪟': ('elements', 'window'),
+        '📍': ('misc', 'globe'),
+        '⚡': ('status', 'alert-triangle'),
+        '🗑️': ('actions', 'trash'),
+    }
+
+    @classmethod
+    def init(cls, resources_path: str = None):
+        """Inizializza il gestore icone"""
+        if resources_path:
+            cls._resources_path = Path(resources_path)
+        else:
+            # Cerca la cartella resources relativa al file corrente
+            cls._resources_path = Path(__file__).parent / 'resources'
+
+        if not cls._resources_path.exists():
+            print(f"Warning: Resources path not found: {cls._resources_path}")
+
+    @classmethod
+    def get_icon_path(cls, category: str, name: str, theme: str = None) -> str:
+        """Ottiene il path completo di un'icona"""
+        if theme is None:
+            theme = ThemeManager.current_theme()
+
+        if cls._resources_path:
+            path = cls._resources_path / 'icons' / theme / category / f'{name}.svg'
+            if path.exists():
+                return str(path)
+        return ""
+
+    @classmethod
+    def get_icon(cls, category: str, name: str, size: int = 24) -> QIcon:
+        """Ottiene un QIcon da categoria e nome"""
+        theme = ThemeManager.current_theme()
+        cache_key = f"{theme}:{category}:{name}:{size}"
+
+        if cache_key in cls._cache:
+            return cls._cache[cache_key]
+
+        icon = QIcon()
+        path = cls.get_icon_path(category, name, theme)
+
+        if path and Path(path).exists():
+            # Usa QSvgRenderer per caricare SVG correttamente
+            if SVG_AVAILABLE:
+                renderer = QSvgRenderer(path)
+                if renderer.isValid():
+                    pixmap = QPixmap(size, size)
+                    pixmap.fill(Qt.transparent)
+                    painter = QPainter(pixmap)
+                    renderer.render(painter)
+                    painter.end()
+                    icon = QIcon(pixmap)
+            else:
+                # Fallback a caricamento diretto
+                pixmap = QPixmap(path)
+                if not pixmap.isNull():
+                    scaled = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    icon = QIcon(scaled)
+
+        cls._cache[cache_key] = icon
+        return icon
+
+    @classmethod
+    def get_icon_from_emoji(cls, emoji: str, size: int = 24) -> QIcon:
+        """Converte un emoji nel corrispondente icona professionale"""
+        if emoji in cls.EMOJI_TO_ICON:
+            category, name = cls.EMOJI_TO_ICON[emoji]
+            return cls.get_icon(category, name, size)
+        return QIcon()
+
+    @classmethod
+    def clear_cache(cls):
+        """Pulisce la cache delle icone (utile per cambio tema)"""
+        cls._cache.clear()
+
+    @classmethod
+    def get_pixmap(cls, category: str, name: str, size: int = 24) -> QPixmap:
+        """Ottiene un QPixmap da categoria e nome"""
+        theme = ThemeManager.current_theme()
+        path = cls.get_icon_path(category, name, theme)
+
+        if path and Path(path).exists():
+            if SVG_AVAILABLE:
+                renderer = QSvgRenderer(path)
+                if renderer.isValid():
+                    pixmap = QPixmap(size, size)
+                    pixmap.fill(Qt.transparent)
+                    painter = QPainter(pixmap)
+                    renderer.render(painter)
+                    painter.end()
+                    return pixmap
+            else:
+                pixmap = QPixmap(path)
+                if not pixmap.isNull():
+                    return pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        return QPixmap()
+
+
+# ============================================================================
+# TYPOGRAPHY - Costanti tipografiche per consistenza
+# ============================================================================
+
+class Typography:
+    """Costanti tipografiche per UI consistente"""
+
+    # Font families
+    FONT_FAMILY = "Segoe UI, Arial, sans-serif"
+    FONT_FAMILY_MONO = "Consolas, Courier New, monospace"
+
+    # Font sizes
+    SIZE_H1 = 24
+    SIZE_H2 = 18
+    SIZE_H3 = 14
+    SIZE_BODY = 12
+    SIZE_SMALL = 10
+    SIZE_TINY = 9
+
+    # Font weights
+    WEIGHT_LIGHT = 300
+    WEIGHT_REGULAR = 400
+    WEIGHT_MEDIUM = 500
+    WEIGHT_BOLD = 700
+
+    @classmethod
+    def get_font(cls, size: int = None, bold: bool = False) -> QFont:
+        """Crea un QFont con le impostazioni standard"""
+        font = QFont(cls.FONT_FAMILY.split(',')[0].strip())
+        font.setPointSize(size or cls.SIZE_BODY)
+        if bold:
+            font.setWeight(cls.WEIGHT_BOLD)
+        return font
+
+    @classmethod
+    def get_header_font(cls, level: int = 1) -> QFont:
+        """Crea font per header (livello 1-3)"""
+        sizes = {1: cls.SIZE_H1, 2: cls.SIZE_H2, 3: cls.SIZE_H3}
+        return cls.get_font(sizes.get(level, cls.SIZE_H3), bold=True)
+
+
+# ============================================================================
+# PROFESSIONAL SPLASH SCREEN
+# ============================================================================
+
+class ProfessionalSplashScreen(QWidget):
+    """Splash screen professionale con progress bar"""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+        self.setFixedSize(500, 300)
+
+        # Centra sullo schermo
+        screen = QApplication.primaryScreen().geometry()
+        x = (screen.width() - self.width()) // 2
+        y = (screen.height() - self.height()) // 2
+        self.move(x, y)
+
+        self.progress = 0
+        self.status_text = "Inizializzazione..."
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Background gradient
+        gradient = QLinearGradient(0, 0, self.width(), self.height())
+        gradient.setColorAt(0, QColor('#1a237e'))
+        gradient.setColorAt(1, QColor('#0d47a1'))
+
+        # Rounded rectangle background
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 10, 10)
+        painter.fillPath(path, QBrush(gradient))
+
+        # Border
+        painter.setPen(QPen(QColor('#FFFFFF'), 1))
+        painter.drawPath(path)
+
+        # Brick pattern icon
+        painter.setPen(QPen(QColor(255, 255, 255, 40), 2))
+        self._draw_brick_pattern(painter, 210, 50, 80)
+
+        # Title
+        painter.setPen(QColor('#FFFFFF'))
+        title_font = QFont('Segoe UI', 32, QFont.Bold)
+        painter.setFont(title_font)
+        painter.drawText(QRectF(0, 145, self.width(), 50), Qt.AlignCenter, "MURATURA")
+
+        # Subtitle
+        painter.setPen(QColor(255, 255, 255, 200))
+        sub_font = QFont('Segoe UI', 12)
+        painter.setFont(sub_font)
+        painter.drawText(QRectF(0, 185, self.width(), 25), Qt.AlignCenter,
+                        "Analisi Sismica Edifici in Muratura")
+
+        # Version
+        painter.setPen(QColor(255, 255, 255, 150))
+        ver_font = QFont('Segoe UI', 10)
+        painter.setFont(ver_font)
+        painter.drawText(QRectF(0, 210, self.width(), 20), Qt.AlignCenter,
+                        "Versione 2.0 - Conforme NTC 2018")
+
+        # Progress bar background
+        bar_rect = QRectF(100, 250, 300, 8)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 50))
+        painter.drawRoundedRect(bar_rect, 4, 4)
+
+        # Progress bar fill
+        if self.progress > 0:
+            fill_width = (self.progress / 100) * 300
+            fill_rect = QRectF(100, 250, fill_width, 8)
+            painter.setBrush(QColor('#4CAF50'))
+            painter.drawRoundedRect(fill_rect, 4, 4)
+
+        # Status text
+        painter.setPen(QColor(255, 255, 255, 150))
+        status_font = QFont('Segoe UI', 9)
+        painter.setFont(status_font)
+        painter.drawText(QRectF(0, 265, self.width(), 25), Qt.AlignCenter, self.status_text)
+
+    def _draw_brick_pattern(self, painter, x, y, size):
+        """Disegna il pattern di mattoni per il logo"""
+        painter.setPen(QPen(QColor(255, 255, 255, 180), 2))
+
+        # Outer rect
+        rect = QRectF(x, y, size, size)
+        painter.drawRoundedRect(rect, 8, 8)
+
+        # Horizontal lines
+        third = size / 3
+        painter.drawLine(int(x), int(y + third), int(x + size), int(y + third))
+        painter.drawLine(int(x), int(y + 2*third), int(x + size), int(y + 2*third))
+
+        # Vertical lines (brick pattern)
+        painter.drawLine(int(x + third), int(y), int(x + third), int(y + third))
+        painter.drawLine(int(x + 2*third), int(y), int(x + 2*third), int(y + third))
+
+        painter.drawLine(int(x + third/2), int(y + third), int(x + third/2), int(y + 2*third))
+        painter.drawLine(int(x + third + third/2), int(y + third), int(x + third + third/2), int(y + 2*third))
+        painter.drawLine(int(x + 2*third + third/2), int(y + third), int(x + 2*third + third/2), int(y + 2*third))
+
+        painter.drawLine(int(x + third), int(y + 2*third), int(x + third), int(y + size))
+        painter.drawLine(int(x + 2*third), int(y + 2*third), int(x + 2*third), int(y + size))
+
+    def setProgress(self, value: int, status: str = None):
+        """Aggiorna progresso e status"""
+        self.progress = min(100, max(0, value))
+        if status:
+            self.status_text = status
+        self.update()
+        QApplication.processEvents()
+
+    def finish(self, main_window):
+        """Chiude lo splash e mostra la finestra principale"""
+        main_window.show()
+        self.close()
+
+
+# ============================================================================
+# ABOUT DIALOG
+# ============================================================================
+
+class AboutDialog(QDialog):
+    """Dialogo informazioni sull'applicazione"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Informazioni su Muratura")
+        self.setFixedSize(450, 400)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        layout.setContentsMargins(30, 30, 30, 20)
+
+        # Logo/Title area
+        title_widget = QWidget()
+        title_layout = QHBoxLayout(title_widget)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Icon
+        icon_label = QLabel()
+        icon_pixmap = IconManager.get_pixmap('elements', 'wall', 64)
+        if not icon_pixmap.isNull():
+            icon_label.setPixmap(icon_pixmap)
+        else:
+            icon_label.setText("🧱")
+            icon_label.setStyleSheet("font-size: 48px;")
+        title_layout.addWidget(icon_label)
+
+        # Title and version
+        title_text = QVBoxLayout()
+        app_name = QLabel("MURATURA")
+        app_name.setStyleSheet("font-size: 28px; font-weight: bold; color: #1a237e;")
+        title_text.addWidget(app_name)
+
+        version = QLabel("Versione 2.0")
+        version.setStyleSheet("font-size: 14px; color: #666;")
+        title_text.addWidget(version)
+        title_layout.addLayout(title_text)
+        title_layout.addStretch()
+
+        layout.addWidget(title_widget)
+
+        # Separator
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("background-color: #e0e0e0;")
+        layout.addWidget(line)
+
+        # Description
+        desc = QLabel(
+            "Software professionale per l'analisi sismica di edifici in muratura.\n\n"
+            "Conforme alle Norme Tecniche per le Costruzioni 2018 (NTC 2018) "
+            "e alla relativa Circolare esplicativa n. 7/2019.\n\n"
+            "Metodi di analisi implementati:\n"
+            "• POR - Pier Only Resistance\n"
+            "• SAM - Simple Analysis Method\n"
+            "• Analisi Limite Cinematica\n"
+            "• FEM - Elementi Finiti\n"
+            "• Micro-Modellazione"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #333; line-height: 1.4;")
+        layout.addWidget(desc)
+
+        layout.addStretch()
+
+        # Copyright
+        copyright_label = QLabel("© 2024 - Tutti i diritti riservati")
+        copyright_label.setStyleSheet("color: #999; font-size: 10px;")
+        copyright_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(copyright_label)
+
+        # Close button
+        btn_close = QPushButton("Chiudi")
+        btn_close.setMinimumHeight(35)
+        btn_close.setStyleSheet("""
+            QPushButton {
+                background-color: #0078D4;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #106EBE;
+            }
+        """)
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close)
 
 
 # ============================================================================
@@ -1104,38 +1536,879 @@ class Progetto:
 
 
 # ============================================================================
+# PROJECT SERIALIZER - SALVATAGGIO/CARICAMENTO JSON
+# ============================================================================
+
+class ProjectSerializer:
+    """Gestisce salvataggio e caricamento progetti in formato JSON (.mur)"""
+
+    VERSION = "2.0"
+
+    @staticmethod
+    def save(progetto: Progetto, filepath: str) -> bool:
+        """Salva il progetto in formato JSON"""
+        try:
+            data = {
+                "version": ProjectSerializer.VERSION,
+                "format": "muratura",
+                "saved_at": datetime.now().isoformat(),
+                "project": {
+                    "nome": progetto.nome,
+                    "autore": progetto.autore,
+                    "n_piani": progetto.n_piani,
+                    "altezza_piano": progetto.altezza_piano,
+                    "indice_rischio": progetto.indice_rischio,
+                    "current_step": progetto.current_step.value,
+                },
+                "muri": [ProjectSerializer._muro_to_dict(m) for m in progetto.muri],
+                "aperture": [ProjectSerializer._apertura_to_dict(a) for a in progetto.aperture],
+                "piani": [ProjectSerializer._piano_to_dict(p) for p in progetto.piani],
+                "solai": [ProjectSerializer._solaio_to_dict(s) for s in progetto.solai],
+                "fondazioni": [ProjectSerializer._fondazione_to_dict(f) for f in progetto.fondazioni],
+                "cordoli": [ProjectSerializer._cordolo_to_dict(c) for c in progetto.cordoli],
+                "tiranti": [ProjectSerializer._tirante_to_dict(t) for t in progetto.tiranti],
+                "scale": [ProjectSerializer._scala_to_dict(s) for s in progetto.scale],
+                "balconi": [ProjectSerializer._balcone_to_dict(b) for b in progetto.balconi],
+                "copertura": ProjectSerializer._copertura_to_dict(progetto.copertura) if progetto.copertura else None,
+                "sismici": ProjectSerializer._sismici_to_dict(progetto.sismici),
+            }
+
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+            return True
+        except Exception as e:
+            print(f"Errore salvataggio: {e}")
+            return False
+
+    @staticmethod
+    def load(filepath: str) -> Optional[Progetto]:
+        """Carica un progetto da file JSON"""
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Verifica formato
+            if data.get("format") != "muratura":
+                raise ValueError("Formato file non valido")
+
+            proj_data = data.get("project", {})
+
+            progetto = Progetto(
+                nome=proj_data.get("nome", "Progetto Importato"),
+                autore=proj_data.get("autore", ""),
+                n_piani=proj_data.get("n_piani", 2),
+                altezza_piano=proj_data.get("altezza_piano", 3.0),
+                indice_rischio=proj_data.get("indice_rischio", 0.0),
+                filepath=filepath,
+            )
+
+            # Current step
+            step_val = proj_data.get("current_step", 0)
+            try:
+                progetto.current_step = WorkflowStep(step_val)
+            except ValueError:
+                progetto.current_step = WorkflowStep.PROGETTO
+
+            # Carica elementi
+            progetto.muri = [ProjectSerializer._dict_to_muro(m) for m in data.get("muri", [])]
+            progetto.aperture = [ProjectSerializer._dict_to_apertura(a) for a in data.get("aperture", [])]
+            progetto.piani = [ProjectSerializer._dict_to_piano(p) for p in data.get("piani", [])]
+            progetto.solai = [ProjectSerializer._dict_to_solaio(s) for s in data.get("solai", [])]
+            progetto.fondazioni = [ProjectSerializer._dict_to_fondazione(f) for f in data.get("fondazioni", [])]
+            progetto.cordoli = [ProjectSerializer._dict_to_cordolo(c) for c in data.get("cordoli", [])]
+            progetto.tiranti = [ProjectSerializer._dict_to_tirante(t) for t in data.get("tiranti", [])]
+            progetto.scale = [ProjectSerializer._dict_to_scala(s) for s in data.get("scale", [])]
+            progetto.balconi = [ProjectSerializer._dict_to_balcone(b) for b in data.get("balconi", [])]
+
+            copertura_data = data.get("copertura")
+            if copertura_data:
+                progetto.copertura = ProjectSerializer._dict_to_copertura(copertura_data)
+
+            sismici_data = data.get("sismici", {})
+            progetto.sismici = ProjectSerializer._dict_to_sismici(sismici_data)
+
+            return progetto
+
+        except Exception as e:
+            print(f"Errore caricamento: {e}")
+            return None
+
+    # === Serializzazione elementi ===
+
+    @staticmethod
+    def _muro_to_dict(m: Muro) -> dict:
+        return {
+            "nome": m.nome, "x1": m.x1, "y1": m.y1, "x2": m.x2, "y2": m.y2,
+            "spessore": m.spessore, "altezza": m.altezza, "z": m.z,
+            "materiale": m.materiale, "selected": m.selected
+        }
+
+    @staticmethod
+    def _dict_to_muro(d: dict) -> Muro:
+        return Muro(
+            nome=d.get("nome", ""), x1=d.get("x1", 0), y1=d.get("y1", 0),
+            x2=d.get("x2", 0), y2=d.get("y2", 0),
+            spessore=d.get("spessore", 0.3), altezza=d.get("altezza", 3.0),
+            z=d.get("z", 0), materiale=d.get("materiale", "muratura"),
+            selected=d.get("selected", False)
+        )
+
+    @staticmethod
+    def _apertura_to_dict(a: Apertura) -> dict:
+        return {
+            "nome": a.nome, "muro": a.muro, "tipo": a.tipo,
+            "larghezza": a.larghezza, "altezza": a.altezza,
+            "posizione": a.posizione, "altezza_davanzale": a.altezza_davanzale
+        }
+
+    @staticmethod
+    def _dict_to_apertura(d: dict) -> Apertura:
+        return Apertura(
+            nome=d.get("nome", ""), muro=d.get("muro", ""),
+            tipo=d.get("tipo", "finestra"), larghezza=d.get("larghezza", 1.0),
+            altezza=d.get("altezza", 1.0), posizione=d.get("posizione", 0),
+            altezza_davanzale=d.get("altezza_davanzale", 0.9)
+        )
+
+    @staticmethod
+    def _piano_to_dict(p: Piano) -> dict:
+        return {
+            "numero": p.numero, "quota": p.quota,
+            "altezza": p.altezza, "nome": p.nome
+        }
+
+    @staticmethod
+    def _dict_to_piano(d: dict) -> Piano:
+        return Piano(
+            numero=d.get("numero", 0), quota=d.get("quota", 0),
+            altezza=d.get("altezza", 3.0), nome=d.get("nome", "")
+        )
+
+    @staticmethod
+    def _solaio_to_dict(s: Solaio) -> dict:
+        return {
+            "nome": s.nome, "piano": s.piano, "tipo": s.tipo,
+            "lunghezza": s.lunghezza, "larghezza": s.larghezza,
+            "peso_proprio": s.peso_proprio, "sovraccarico": s.sovraccarico,
+            "direzione_orditura": s.direzione_orditura
+        }
+
+    @staticmethod
+    def _dict_to_solaio(d: dict) -> Solaio:
+        return Solaio(
+            nome=d.get("nome", ""), piano=d.get("piano", 0),
+            tipo=d.get("tipo", "laterocemento"),
+            lunghezza=d.get("lunghezza", 0), larghezza=d.get("larghezza", 0),
+            peso_proprio=d.get("peso_proprio", 3.0),
+            sovraccarico=d.get("sovraccarico", 2.0),
+            direzione_orditura=d.get("direzione_orditura", "X")
+        )
+
+    @staticmethod
+    def _fondazione_to_dict(f: Fondazione) -> dict:
+        return {
+            "nome": f.nome, "tipo": f.tipo, "larghezza": f.larghezza,
+            "altezza": f.altezza, "muro_associato": f.muro_associato
+        }
+
+    @staticmethod
+    def _dict_to_fondazione(d: dict) -> Fondazione:
+        return Fondazione(
+            nome=d.get("nome", ""), tipo=d.get("tipo", "continua"),
+            larghezza=d.get("larghezza", 0.6), altezza=d.get("altezza", 0.5),
+            muro_associato=d.get("muro_associato", "")
+        )
+
+    @staticmethod
+    def _cordolo_to_dict(c: Cordolo) -> dict:
+        return {
+            "nome": c.nome, "piano": c.piano, "base": c.base,
+            "altezza": c.altezza, "armatura": c.armatura, "muro": c.muro
+        }
+
+    @staticmethod
+    def _dict_to_cordolo(d: dict) -> Cordolo:
+        return Cordolo(
+            nome=d.get("nome", ""), piano=d.get("piano", 0),
+            base=d.get("base", 0.3), altezza=d.get("altezza", 0.25),
+            armatura=d.get("armatura", "4Ø12"), muro=d.get("muro", "")
+        )
+
+    @staticmethod
+    def _tirante_to_dict(t: Tirante) -> dict:
+        return {
+            "nome": t.nome, "piano": t.piano, "diametro": t.diametro,
+            "materiale": t.materiale, "x1": t.x1, "y1": t.y1,
+            "x2": t.x2, "y2": t.y2
+        }
+
+    @staticmethod
+    def _dict_to_tirante(d: dict) -> Tirante:
+        return Tirante(
+            nome=d.get("nome", ""), piano=d.get("piano", 0),
+            diametro=d.get("diametro", 20), materiale=d.get("materiale", "acciaio"),
+            x1=d.get("x1", 0), y1=d.get("y1", 0),
+            x2=d.get("x2", 0), y2=d.get("y2", 0)
+        )
+
+    @staticmethod
+    def _scala_to_dict(s: Scala) -> dict:
+        return {
+            "nome": s.nome, "tipo": s.tipo, "larghezza": s.larghezza,
+            "n_gradini": s.n_gradini, "piano_partenza": s.piano_partenza
+        }
+
+    @staticmethod
+    def _dict_to_scala(d: dict) -> Scala:
+        return Scala(
+            nome=d.get("nome", ""), tipo=d.get("tipo", "rampa"),
+            larghezza=d.get("larghezza", 1.2),
+            n_gradini=d.get("n_gradini", 16),
+            piano_partenza=d.get("piano_partenza", 0)
+        )
+
+    @staticmethod
+    def _balcone_to_dict(b: Balcone) -> dict:
+        return {
+            "nome": b.nome, "piano": b.piano, "muro": b.muro,
+            "lunghezza": b.lunghezza, "sbalzo": b.sbalzo, "spessore": b.spessore
+        }
+
+    @staticmethod
+    def _dict_to_balcone(d: dict) -> Balcone:
+        return Balcone(
+            nome=d.get("nome", ""), piano=d.get("piano", 0),
+            muro=d.get("muro", ""), lunghezza=d.get("lunghezza", 2.0),
+            sbalzo=d.get("sbalzo", 1.0), spessore=d.get("spessore", 0.15)
+        )
+
+    @staticmethod
+    def _copertura_to_dict(c: Copertura) -> dict:
+        return {
+            "tipo": c.tipo, "pendenza": c.pendenza,
+            "materiale": c.materiale, "peso": c.peso
+        }
+
+    @staticmethod
+    def _dict_to_copertura(d: dict) -> Copertura:
+        return Copertura(
+            tipo=d.get("tipo", "piana"), pendenza=d.get("pendenza", 0),
+            materiale=d.get("materiale", "laterizio"), peso=d.get("peso", 1.5)
+        )
+
+    @staticmethod
+    def _sismici_to_dict(s: ParametriSismici) -> dict:
+        return {
+            "comune": s.comune, "lon": s.lon, "lat": s.lat,
+            "ag_slv": s.ag_slv, "F0": s.F0, "Tc_star": s.Tc_star,
+            "sottosuolo": s.sottosuolo, "topografia": s.topografia,
+            "classe_uso": s.classe_uso, "vita_nominale": s.vita_nominale,
+            "fattore_struttura": getattr(s, 'fattore_struttura', 2.0)
+        }
+
+    @staticmethod
+    def _dict_to_sismici(d: dict) -> ParametriSismici:
+        s = ParametriSismici(
+            comune=d.get("comune", ""),
+            lon=d.get("lon", 0), lat=d.get("lat", 0),
+            ag_slv=d.get("ag_slv", 0), F0=d.get("F0", 2.5),
+            Tc_star=d.get("Tc_star", 0.3),
+            sottosuolo=d.get("sottosuolo", "B"),
+            topografia=d.get("topografia", "T1"),
+            classe_uso=d.get("classe_uso", "II"),
+            vita_nominale=d.get("vita_nominale", 50)
+        )
+        if 'fattore_struttura' in d:
+            s.fattore_struttura = d['fattore_struttura']
+        return s
+
+
+# ============================================================================
+# GEOMETRY ENGINE (Shapely-based spatial indexing)
+# ============================================================================
+
+class GeometryEngine:
+    """
+    Engine geometrico basato su Shapely per operazioni efficienti.
+    Utilizza STRtree per query spaziali O(log n) invece di O(n²).
+    """
+
+    def __init__(self):
+        self._spatial_index = None
+        self._geometries = []
+        self._muri_refs = []  # Riferimento ai muri originali
+        self._index_valid = False
+
+    def rebuild_index(self, muri: list):
+        """Ricostruisce spatial index per query veloci"""
+        if not SHAPELY_AVAILABLE:
+            self._index_valid = False
+            return
+
+        self._geometries = []
+        self._muri_refs = []
+
+        for muro in muri:
+            line = LineString([(muro.x1, muro.y1), (muro.x2, muro.y2)])
+            self._geometries.append(line)
+            self._muri_refs.append(muro)
+
+        if self._geometries:
+            self._spatial_index = STRtree(self._geometries)
+        else:
+            self._spatial_index = None
+
+        self._index_valid = True
+
+    def invalidate(self):
+        """Invalida l'indice (da chiamare quando i muri cambiano)"""
+        self._index_valid = False
+
+    @property
+    def is_valid(self):
+        return self._index_valid and SHAPELY_AVAILABLE
+
+    def find_near_point(self, x: float, y: float, radius: float) -> list:
+        """
+        Trova muri vicini a un punto - O(log n) invece di O(n²).
+        Ritorna lista di tuple (muro, distanza, punto_piu_vicino).
+        """
+        if not self.is_valid or self._spatial_index is None:
+            return []
+
+        point = Point(x, y)
+        search_area = point.buffer(radius)
+
+        results = []
+        # Query l'indice spaziale
+        candidate_indices = self._spatial_index.query(search_area)
+
+        for idx in candidate_indices:
+            if idx < len(self._geometries):
+                geom = self._geometries[idx]
+                muro = self._muri_refs[idx]
+                dist = point.distance(geom)
+                if dist <= radius:
+                    # Trova punto più vicino sulla linea
+                    nearest = geom.interpolate(geom.project(point))
+                    results.append((muro, dist, (nearest.x, nearest.y)))
+
+        # Ordina per distanza
+        results.sort(key=lambda x: x[1])
+        return results
+
+    def find_intersections(self, x1: float, y1: float, x2: float, y2: float) -> list:
+        """
+        Trova intersezioni tra una linea e i muri esistenti.
+        Ritorna lista di tuple (muro, punto_intersezione).
+        """
+        if not self.is_valid or self._spatial_index is None:
+            return []
+
+        line = LineString([(x1, y1), (x2, y2)])
+        results = []
+
+        candidate_indices = self._spatial_index.query(line)
+
+        for idx in candidate_indices:
+            if idx < len(self._geometries):
+                geom = self._geometries[idx]
+                muro = self._muri_refs[idx]
+                if line.intersects(geom):
+                    intersection = line.intersection(geom)
+                    if not intersection.is_empty:
+                        if intersection.geom_type == 'Point':
+                            results.append((muro, (intersection.x, intersection.y)))
+                        elif intersection.geom_type == 'MultiPoint':
+                            for pt in intersection.geoms:
+                                results.append((muro, (pt.x, pt.y)))
+
+        return results
+
+    def get_endpoints(self, radius: float = 0.01) -> list:
+        """
+        Ritorna tutti gli endpoint dei muri per snap.
+        Ritorna lista di tuple (x, y, muro).
+        """
+        endpoints = []
+        for muro in self._muri_refs:
+            endpoints.append((muro.x1, muro.y1, muro))
+            endpoints.append((muro.x2, muro.y2, muro))
+        return endpoints
+
+    def get_midpoints(self) -> list:
+        """
+        Ritorna tutti i punti medi dei muri per snap.
+        Ritorna lista di tuple (x, y, muro).
+        """
+        midpoints = []
+        for muro in self._muri_refs:
+            mx = (muro.x1 + muro.x2) / 2
+            my = (muro.y1 + muro.y2) / 2
+            midpoints.append((mx, my, muro))
+        return midpoints
+
+
+# ============================================================================
+# GEOMETRY WORKER (QThread per calcoli pesanti)
+# ============================================================================
+
+class GeometryWorker(QThread):
+    """
+    Worker thread per calcoli geometrici pesanti.
+    Esegue operazioni in background senza bloccare la UI.
+    """
+
+    # Segnali per comunicare risultati
+    snap_result = pyqtSignal(float, float, str)  # x, y, snap_type
+    intersection_result = pyqtSignal(list)  # lista intersezioni
+    validation_result = pyqtSignal(bool, str)  # valido, messaggio
+    progress = pyqtSignal(int)  # percentuale completamento
+    finished_task = pyqtSignal(str, object)  # nome_task, risultato
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.task = None
+        self.params = {}
+        self.geometry_engine = None
+        self._stop_requested = False
+
+    def setTask(self, task_name: str, params: dict, engine: 'GeometryEngine' = None):
+        """
+        Imposta il task da eseguire.
+        task_name: 'snap', 'intersections', 'validate', 'rebuild_index'
+        params: dizionario con parametri specifici del task
+        """
+        self.task = task_name
+        self.params = params
+        self.geometry_engine = engine
+
+    def requestStop(self):
+        """Richiede interruzione del task"""
+        self._stop_requested = True
+
+    def run(self):
+        """Esegue il task in background"""
+        self._stop_requested = False
+
+        try:
+            if self.task == 'snap':
+                self._runSnapTask()
+            elif self.task == 'intersections':
+                self._runIntersectionsTask()
+            elif self.task == 'validate':
+                self._runValidationTask()
+            elif self.task == 'rebuild_index':
+                self._runRebuildIndexTask()
+            elif self.task == 'batch_snap':
+                self._runBatchSnapTask()
+        except Exception as e:
+            self.finished_task.emit(self.task, {'error': str(e)})
+
+    def _runSnapTask(self):
+        """Calcola snap point in background"""
+        x = self.params.get('x', 0)
+        y = self.params.get('y', 0)
+        radius = self.params.get('radius', 0.3)
+
+        if self.geometry_engine and self.geometry_engine.is_valid:
+            nearby = self.geometry_engine.find_near_point(x, y, radius)
+            if nearby:
+                muro, dist, point = nearby[0]
+                self.snap_result.emit(point[0], point[1], 'nearest')
+                return
+
+        self.snap_result.emit(x, y, 'none')
+
+    def _runIntersectionsTask(self):
+        """Trova tutte le intersezioni in background"""
+        muri = self.params.get('muri', [])
+        results = []
+
+        total = len(muri) * (len(muri) - 1) // 2
+        count = 0
+
+        for i, m1 in enumerate(muri):
+            if self._stop_requested:
+                break
+            for m2 in muri[i+1:]:
+                if self._stop_requested:
+                    break
+                # Calcola intersezione
+                ix, iy = self._lineIntersection(
+                    m1.x1, m1.y1, m1.x2, m1.y2,
+                    m2.x1, m2.y1, m2.x2, m2.y2
+                )
+                if ix is not None:
+                    results.append({
+                        'muro1': m1.nome,
+                        'muro2': m2.nome,
+                        'x': ix, 'y': iy
+                    })
+                count += 1
+                if total > 0:
+                    self.progress.emit(int(count / total * 100))
+
+        self.intersection_result.emit(results)
+        self.finished_task.emit('intersections', results)
+
+    def _runValidationTask(self):
+        """Valida geometria edificio in background"""
+        muri = self.params.get('muri', [])
+        issues = []
+
+        # Controlla muri troppo corti
+        for m in muri:
+            if self._stop_requested:
+                break
+            if m.lunghezza < 0.5:
+                issues.append(f"{m.nome}: lunghezza troppo corta ({m.lunghezza:.2f}m)")
+
+        # Controlla muri sovrapposti
+        for i, m1 in enumerate(muri):
+            if self._stop_requested:
+                break
+            for m2 in muri[i+1:]:
+                if self._checkOverlap(m1, m2):
+                    issues.append(f"{m1.nome} e {m2.nome}: sovrapposizione rilevata")
+
+        valid = len(issues) == 0
+        message = "Geometria valida" if valid else "\n".join(issues)
+        self.validation_result.emit(valid, message)
+        self.finished_task.emit('validate', {'valid': valid, 'issues': issues})
+
+    def _runRebuildIndexTask(self):
+        """Ricostruisce spatial index in background"""
+        muri = self.params.get('muri', [])
+
+        if self.geometry_engine:
+            self.geometry_engine.rebuild_index(muri)
+            self.finished_task.emit('rebuild_index', {'count': len(muri)})
+
+    def _runBatchSnapTask(self):
+        """Calcola snap points per batch di punti"""
+        points = self.params.get('points', [])
+        radius = self.params.get('radius', 0.3)
+        results = []
+
+        for i, (x, y) in enumerate(points):
+            if self._stop_requested:
+                break
+            if self.geometry_engine and self.geometry_engine.is_valid:
+                nearby = self.geometry_engine.find_near_point(x, y, radius)
+                if nearby:
+                    muro, dist, point = nearby[0]
+                    results.append((point[0], point[1], 'nearest'))
+                else:
+                    results.append((x, y, 'none'))
+            else:
+                results.append((x, y, 'none'))
+
+            self.progress.emit(int((i + 1) / len(points) * 100))
+
+        self.finished_task.emit('batch_snap', results)
+
+    def _lineIntersection(self, x1, y1, x2, y2, x3, y3, x4, y4):
+        """Calcola intersezione tra due segmenti"""
+        denom = (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4)
+        if abs(denom) < 1e-10:
+            return None, None
+
+        t = ((x1-x3)*(y3-y4) - (y1-y3)*(x3-x4)) / denom
+        u = -((x1-x2)*(y1-y3) - (y1-y2)*(x1-x3)) / denom
+
+        if 0 <= t <= 1 and 0 <= u <= 1:
+            ix = x1 + t*(x2-x1)
+            iy = y1 + t*(y2-y1)
+            return ix, iy
+        return None, None
+
+    def _checkOverlap(self, m1, m2):
+        """Controlla se due muri si sovrappongono"""
+        # Semplificato: controlla se i centri sono troppo vicini
+        cx1 = (m1.x1 + m1.x2) / 2
+        cy1 = (m1.y1 + m1.y2) / 2
+        cx2 = (m2.x1 + m2.x2) / 2
+        cy2 = (m2.y1 + m2.y2) / 2
+
+        dist = math.sqrt((cx1-cx2)**2 + (cy1-cy2)**2)
+        min_dist = (m1.spessore + m2.spessore) / 2
+
+        return dist < min_dist and abs(m1.z - m2.z) < 0.1
+
+
+# ============================================================================
+# GPU RENDERING (ModernGL)
+# ============================================================================
+
+class GLDrawingCanvas(QGLWidget if MODERNGL_AVAILABLE else QWidget):
+    """
+    Canvas 2D con rendering GPU accelerato usando ModernGL.
+    Disegna muri e elementi usando OpenGL per performance elevate.
+    Fallback a QPainter se OpenGL non disponibile.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.ctx = None
+        self.prog = None
+        self.vbo = None
+        self.vao = None
+        self.use_gpu = MODERNGL_AVAILABLE
+
+        # Dati geometria
+        self.vertices = []
+        self.colors = []
+        self.needs_update = True
+
+        # Vista
+        self.scala = 40
+        self.offset_x = 0
+        self.offset_y = 0
+
+        # Progetto
+        self.progetto = None
+
+    def initializeGL(self):
+        """Inizializza contesto OpenGL e shader"""
+        if not MODERNGL_AVAILABLE:
+            return
+
+        try:
+            self.ctx = moderngl.create_context()
+
+            # Shader per linee 2D con colori
+            self.prog = self.ctx.program(
+                vertex_shader='''
+                    #version 330
+                    in vec2 in_position;
+                    in vec3 in_color;
+                    out vec3 v_color;
+                    uniform vec2 u_scale;
+                    uniform vec2 u_offset;
+                    uniform vec2 u_resolution;
+
+                    void main() {
+                        vec2 pos = (in_position * u_scale + u_offset) / u_resolution * 2.0 - 1.0;
+                        pos.y = -pos.y;  // Flip Y per coordinate schermo
+                        gl_Position = vec4(pos, 0.0, 1.0);
+                        v_color = in_color;
+                    }
+                ''',
+                fragment_shader='''
+                    #version 330
+                    in vec3 v_color;
+                    out vec4 fragColor;
+
+                    void main() {
+                        fragColor = vec4(v_color, 1.0);
+                    }
+                '''
+            )
+
+            # Uniform locations
+            self.u_scale = self.prog['u_scale']
+            self.u_offset = self.prog['u_offset']
+            self.u_resolution = self.prog['u_resolution']
+
+        except Exception as e:
+            print(f"Errore inizializzazione OpenGL: {e}")
+            self.use_gpu = False
+
+    def setProgetto(self, progetto):
+        """Imposta il progetto e aggiorna geometria GPU"""
+        self.progetto = progetto
+        self.needs_update = True
+        self.update()
+
+    def updateGeometry(self):
+        """Aggiorna VBO con la geometria dei muri"""
+        if not self.use_gpu or not self.ctx or not self.progetto:
+            return
+
+        vertices = []
+        colors = []
+
+        # Colore muri (blu)
+        muro_color = (0.2, 0.4, 0.8)
+
+        for muro in self.progetto.muri:
+            # Calcola i 4 punti del muro
+            dx = muro.x2 - muro.x1
+            dy = muro.y2 - muro.y1
+            length = math.sqrt(dx*dx + dy*dy)
+            if length > 0:
+                nx = -dy / length * muro.spessore / 2
+                ny = dx / length * muro.spessore / 2
+
+                # 4 vertici del rettangolo
+                p1 = (muro.x1 - nx, muro.y1 - ny)
+                p2 = (muro.x1 + nx, muro.y1 + ny)
+                p3 = (muro.x2 + nx, muro.y2 + ny)
+                p4 = (muro.x2 - nx, muro.y2 - ny)
+
+                # Due triangoli per il rettangolo
+                for p in [p1, p2, p3, p1, p3, p4]:
+                    vertices.extend(p)
+                    colors.extend(muro_color)
+
+        if vertices:
+            # Crea array numpy
+            import numpy as np
+            vertices_array = np.array(vertices, dtype='f4')
+            colors_array = np.array(colors, dtype='f4')
+
+            # Combina posizioni e colori
+            data = np.zeros(len(vertices) // 2 * 5, dtype='f4')
+            data[0::5] = vertices_array[0::2]  # x
+            data[1::5] = vertices_array[1::2]  # y
+            data[2::5] = colors_array[0::3]    # r
+            data[3::5] = colors_array[1::3]    # g
+            data[4::5] = colors_array[2::3]    # b
+
+            # Aggiorna VBO
+            if self.vbo:
+                self.vbo.release()
+            self.vbo = self.ctx.buffer(data.tobytes())
+
+            # Crea VAO
+            if self.vao:
+                self.vao.release()
+            self.vao = self.ctx.simple_vertex_array(
+                self.prog, self.vbo, 'in_position', 'in_color',
+            )
+
+        self.needs_update = False
+
+    def paintGL(self):
+        """Renderizza scena con OpenGL"""
+        if not self.use_gpu or not self.ctx:
+            # Fallback a QPainter
+            self.paintFallback()
+            return
+
+        # Pulisci sfondo
+        self.ctx.clear(0.95, 0.95, 0.98)
+
+        if self.needs_update:
+            self.updateGeometry()
+
+        if self.vao:
+            # Imposta uniform
+            self.u_scale.value = (self.scala, self.scala)
+            self.u_offset.value = (self.offset_x, self.offset_y)
+            self.u_resolution.value = (self.width(), self.height())
+
+            # Render
+            self.vao.render(moderngl.TRIANGLES)
+
+    def paintFallback(self):
+        """Fallback rendering con QPainter se OpenGL non disponibile"""
+        from PyQt5.QtGui import QPainter, QColor, QPen, QBrush
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Sfondo
+        painter.fillRect(self.rect(), QColor(240, 240, 245))
+
+        if not self.progetto:
+            return
+
+        # Disegna muri
+        painter.setPen(QPen(QColor(50, 100, 200), 2))
+        painter.setBrush(QBrush(QColor(100, 150, 220, 100)))
+
+        for muro in self.progetto.muri:
+            dx = muro.x2 - muro.x1
+            dy = muro.y2 - muro.y1
+            length = math.sqrt(dx*dx + dy*dy)
+            if length > 0:
+                nx = -dy / length * muro.spessore / 2
+                ny = dx / length * muro.spessore / 2
+
+                # Trasforma a coordinate schermo
+                def toScreen(x, y):
+                    return (
+                        int(x * self.scala + self.offset_x),
+                        int(-y * self.scala + self.offset_y)
+                    )
+
+                from PyQt5.QtGui import QPolygonF
+                from PyQt5.QtCore import QPointF
+                points = [
+                    QPointF(*toScreen(muro.x1 - nx, muro.y1 - ny)),
+                    QPointF(*toScreen(muro.x1 + nx, muro.y1 + ny)),
+                    QPointF(*toScreen(muro.x2 + nx, muro.y2 + ny)),
+                    QPointF(*toScreen(muro.x2 - nx, muro.y2 - ny)),
+                ]
+                painter.drawPolygon(QPolygonF(points))
+
+    def resizeGL(self, w, h):
+        """Gestisce resize del widget"""
+        if self.ctx:
+            self.ctx.viewport = (0, 0, w, h)
+        self.offset_x = w // 2
+        self.offset_y = h // 2
+
+    def wheelEvent(self, event):
+        """Zoom con rotella mouse"""
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.scala = min(200, self.scala * 1.1)
+        else:
+            self.scala = max(10, self.scala / 1.1)
+        self.update()
+
+
+# ============================================================================
 # RIBBON TOOLBAR
 # ============================================================================
 
 class RibbonButton(QToolButton):
     """Pulsante grande per Ribbon con icona e testo"""
 
-    def __init__(self, text: str, icon_char: str = "", parent=None):
+    def __init__(self, text: str, icon_name: str = None, icon_category: str = None, parent=None):
         super().__init__(parent)
         self.setText(text)
         self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.setMinimumSize(70, 60)
-        self.setMaximumSize(90, 70)
+        self.setMinimumSize(65, 65)
+        self.setMaximumSize(80, 75)
+        self.setIconSize(QSize(24, 24))
 
-        # Stile
-        self.setStyleSheet("""
-            QToolButton {
+        # Imposta icona se specificata
+        if icon_name and icon_category:
+            icon = IconManager.get_icon(icon_category, icon_name, 24)
+            if not icon.isNull():
+                self.setIcon(icon)
+
+        # Stile professionale con supporto temi
+        self._update_style()
+
+    def _update_style(self):
+        """Aggiorna stile in base al tema"""
+        t = ThemeManager.THEMES[ThemeManager.current_theme()]
+        self.setStyleSheet(f"""
+            QToolButton {{
                 border: 1px solid transparent;
                 border-radius: 4px;
-                padding: 5px;
-                font-size: 10px;
-            }
-            QToolButton:hover {
-                background-color: #e0e0e0;
-                border: 1px solid #c0c0c0;
-            }
-            QToolButton:pressed {
-                background-color: #d0d0d0;
-            }
-            QToolButton:checked {
-                background-color: #cce0ff;
-                border: 1px solid #99c0ff;
-            }
+                padding: 4px 2px;
+                font-size: 9px;
+                background-color: transparent;
+                color: {t['text']};
+            }}
+            QToolButton:hover {{
+                background-color: {t['hover']};
+                border: 1px solid {t['border']};
+            }}
+            QToolButton:pressed {{
+                background-color: {t['primary']};
+                color: white;
+            }}
+            QToolButton:checked {{
+                background-color: {t['selection']};
+                border: 1px solid {t['primary']};
+            }}
         """)
 
 
@@ -1198,25 +2471,31 @@ class RibbonToolbar(QTabWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(95)
-        self.setMaximumHeight(95)
+        self.setMinimumHeight(100)
+        self.setMaximumHeight(100)
 
-        self.setStyleSheet("""
-            QTabWidget::pane {
+        t = ThemeManager.THEMES[ThemeManager.current_theme()]
+        self.setStyleSheet(f"""
+            QTabWidget::pane {{
                 border: none;
-                background-color: #f5f5f5;
-            }
-            QTabBar::tab {
-                padding: 8px 20px;
+                background-color: {t['surface']};
+            }}
+            QTabBar::tab {{
+                padding: 10px 25px;
                 font-weight: bold;
-            }
-            QTabBar::tab:selected {
-                background-color: #f5f5f5;
-                border-bottom: 2px solid #0066cc;
-            }
-            QTabBar::tab:!selected {
-                background-color: #e8e8e8;
-            }
+                font-size: 11px;
+                min-width: 60px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {t['surface']};
+                border-bottom: 3px solid {t['primary']};
+            }}
+            QTabBar::tab:!selected {{
+                background-color: {t['background']};
+            }}
+            QTabBar::tab:hover {{
+                background-color: {t['hover']};
+            }}
         """)
 
 
@@ -1225,51 +2504,90 @@ class RibbonToolbar(QTabWidget):
 # ============================================================================
 
 class ProjectBrowser(QDockWidget):
-    """Browser ad albero del progetto"""
+    """Browser ad albero del progetto con icone professionali"""
 
     itemSelected = pyqtSignal(str, str)  # tipo, nome
 
+    # Mapping nodi -> icone
+    NODE_ICONS = {
+        'progetto': ('navigation', 'folder'),
+        'piani': ('navigation', 'floors'),
+        'muri': ('elements', 'wall'),
+        'aperture': ('elements', 'door'),
+        'fondazioni': ('elements', 'foundation'),
+        'cordoli': ('elements', 'chain'),
+        'tiranti': ('elements', 'tie'),
+        'solai': ('elements', 'slab'),
+        'scale': ('elements', 'stairs'),
+        'balconi': ('elements', 'balcony'),
+        'copertura': ('elements', 'roof'),
+        'carichi': ('elements', 'load'),
+        'analisi': ('misc', 'chart'),
+    }
+
     def __init__(self, parent=None):
         super().__init__("Progetto", parent)
-        self.setMinimumWidth(200)
+        self.setMinimumWidth(220)
         self.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
 
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
-        self.tree.setIndentation(15)
+        self.tree.setIndentation(20)
+        self.tree.setIconSize(QSize(18, 18))
         self.tree.itemClicked.connect(self.onItemClicked)
 
-        self.tree.setStyleSheet("""
-            QTreeWidget {
-                border: none;
-                font-size: 11px;
-            }
-            QTreeWidget::item {
-                padding: 3px;
-            }
-            QTreeWidget::item:selected {
-                background-color: #cce0ff;
-            }
-        """)
-
+        self._update_style()
         self.setWidget(self.tree)
 
-        # Nodi principali
-        self.root_progetto = QTreeWidgetItem(self.tree, ["📁 Progetto"])
-        self.root_piani = QTreeWidgetItem(self.tree, ["📐 Piani"])
-        self.root_muri = QTreeWidgetItem(self.tree, ["🧱 Muri"])
-        self.root_aperture = QTreeWidgetItem(self.tree, ["🚪 Aperture"])
-        self.root_fondazioni = QTreeWidgetItem(self.tree, ["🏗️ Fondazioni"])
-        self.root_cordoli = QTreeWidgetItem(self.tree, ["🔗 Cordoli"])
-        self.root_tiranti = QTreeWidgetItem(self.tree, ["⛓️ Tiranti"])
-        self.root_solai = QTreeWidgetItem(self.tree, ["▭ Solai"])
-        self.root_scale = QTreeWidgetItem(self.tree, ["🪜 Scale"])
-        self.root_balconi = QTreeWidgetItem(self.tree, ["🏠 Balconi"])
-        self.root_copertura = QTreeWidgetItem(self.tree, ["🏠 Copertura"])
-        self.root_carichi = QTreeWidgetItem(self.tree, ["⬇ Carichi"])
-        self.root_analisi = QTreeWidgetItem(self.tree, ["📊 Analisi"])
+        # Nodi principali con icone
+        self.root_progetto = self._create_node("Progetto", 'progetto')
+        self.root_piani = self._create_node("Piani", 'piani')
+        self.root_muri = self._create_node("Muri", 'muri')
+        self.root_aperture = self._create_node("Aperture", 'aperture')
+        self.root_fondazioni = self._create_node("Fondazioni", 'fondazioni')
+        self.root_cordoli = self._create_node("Cordoli", 'cordoli')
+        self.root_tiranti = self._create_node("Tiranti", 'tiranti')
+        self.root_solai = self._create_node("Solai", 'solai')
+        self.root_scale = self._create_node("Scale", 'scale')
+        self.root_balconi = self._create_node("Balconi", 'balconi')
+        self.root_copertura = self._create_node("Copertura", 'copertura')
+        self.root_carichi = self._create_node("Carichi", 'carichi')
+        self.root_analisi = self._create_node("Analisi", 'analisi')
 
         self.tree.expandAll()
+
+    def _create_node(self, text: str, icon_key: str) -> QTreeWidgetItem:
+        """Crea un nodo con icona professionale"""
+        item = QTreeWidgetItem(self.tree, [text])
+        if icon_key in self.NODE_ICONS:
+            category, name = self.NODE_ICONS[icon_key]
+            icon = IconManager.get_icon(category, name, 18)
+            if not icon.isNull():
+                item.setIcon(0, icon)
+        return item
+
+    def _update_style(self):
+        """Aggiorna stile in base al tema"""
+        t = ThemeManager.THEMES[ThemeManager.current_theme()]
+        self.tree.setStyleSheet(f"""
+            QTreeWidget {{
+                border: none;
+                font-size: 11px;
+                background-color: {t['surface']};
+                color: {t['text']};
+            }}
+            QTreeWidget::item {{
+                padding: 4px 2px;
+                border-radius: 3px;
+            }}
+            QTreeWidget::item:hover {{
+                background-color: {t['hover']};
+            }}
+            QTreeWidget::item:selected {{
+                background-color: {t['selection']};
+                color: white;
+            }}
+        """)
 
     def updateFromProject(self, progetto: Progetto):
         """Aggiorna albero dal progetto"""
@@ -1280,66 +2598,66 @@ class ProjectBrowser(QDockWidget):
             root.takeChildren()
 
         # Progetto
-        self.root_progetto.setText(0, f"📁 {progetto.nome}")
+        self.root_progetto.setText(0, progetto.nome)
 
         # Piani
         for piano in progetto.piani:
-            QTreeWidgetItem(self.root_piani, [f"  {piano.nome} (h={piano.altezza}m)"])
+            QTreeWidgetItem(self.root_piani, [f"{piano.nome} (h={piano.altezza}m)"])
 
         # Muri
         for muro in progetto.muri:
             dcr_str = f" DCR={muro.dcr:.2f}" if muro.dcr > 0 else ""
-            QTreeWidgetItem(self.root_muri, [f"  {muro.nome} ({muro.lunghezza:.1f}m){dcr_str}"])
+            QTreeWidgetItem(self.root_muri, [f"{muro.nome} ({muro.lunghezza:.1f}m){dcr_str}"])
 
         # Aperture
         for ap in progetto.aperture:
-            QTreeWidgetItem(self.root_aperture, [f"  {ap.nome} ({ap.tipo})"])
+            QTreeWidgetItem(self.root_aperture, [f"{ap.nome} ({ap.tipo})"])
 
         # Solai
         for solaio in progetto.solai:
-            QTreeWidgetItem(self.root_solai, [f"  {solaio.nome} ({solaio.tipo})"])
+            QTreeWidgetItem(self.root_solai, [f"{solaio.nome} ({solaio.tipo})"])
 
         # Fondazioni
         for fond in progetto.fondazioni:
-            QTreeWidgetItem(self.root_fondazioni, [f"  {fond.nome} ({fond.tipo})"])
+            QTreeWidgetItem(self.root_fondazioni, [f"{fond.nome} ({fond.tipo})"])
 
         # Cordoli
         for cord in progetto.cordoli:
-            QTreeWidgetItem(self.root_cordoli, [f"  {cord.nome} P{cord.piano}"])
+            QTreeWidgetItem(self.root_cordoli, [f"{cord.nome} P{cord.piano}"])
 
         # Tiranti
         for tir in progetto.tiranti:
-            QTreeWidgetItem(self.root_tiranti, [f"  {tir.nome} Ø{tir.diametro}"])
+            QTreeWidgetItem(self.root_tiranti, [f"{tir.nome} Ø{tir.diametro}"])
 
         # Scale
         for scala in progetto.scale:
-            QTreeWidgetItem(self.root_scale, [f"  {scala.nome} ({scala.tipo})"])
+            QTreeWidgetItem(self.root_scale, [f"{scala.nome} ({scala.tipo})"])
 
         # Balconi
         for balc in progetto.balconi:
-            QTreeWidgetItem(self.root_balconi, [f"  {balc.nome} ({balc.profondita}m)"])
+            QTreeWidgetItem(self.root_balconi, [f"{balc.nome} ({balc.profondita}m)"])
 
         # Copertura
         self.root_copertura.takeChildren()
         if progetto.copertura:
-            QTreeWidgetItem(self.root_copertura, [f"  {progetto.copertura.tipo}"])
+            QTreeWidgetItem(self.root_copertura, [f"{progetto.copertura.tipo}"])
 
         # Conta elementi
-        self.root_muri.setText(0, f"🧱 Muri ({len(progetto.muri)})")
-        self.root_aperture.setText(0, f"🚪 Aperture ({len(progetto.aperture)})")
-        self.root_fondazioni.setText(0, f"🏗️ Fondazioni ({len(progetto.fondazioni)})")
-        self.root_cordoli.setText(0, f"🔗 Cordoli ({len(progetto.cordoli)})")
-        self.root_tiranti.setText(0, f"⛓️ Tiranti ({len(progetto.tiranti)})")
-        self.root_solai.setText(0, f"▭ Solai ({len(progetto.solai)})")
-        self.root_scale.setText(0, f"🪜 Scale ({len(progetto.scale)})")
-        self.root_balconi.setText(0, f"🏠 Balconi ({len(progetto.balconi)})")
+        self.root_muri.setText(0, f"Muri ({len(progetto.muri)})")
+        self.root_aperture.setText(0, f"Aperture ({len(progetto.aperture)})")
+        self.root_fondazioni.setText(0, f"Fondazioni ({len(progetto.fondazioni)})")
+        self.root_cordoli.setText(0, f"Cordoli ({len(progetto.cordoli)})")
+        self.root_tiranti.setText(0, f"Tiranti ({len(progetto.tiranti)})")
+        self.root_solai.setText(0, f"Solai ({len(progetto.solai)})")
+        self.root_scale.setText(0, f"Scale ({len(progetto.scale)})")
+        self.root_balconi.setText(0, f"Balconi ({len(progetto.balconi)})")
 
         self.tree.expandAll()
 
     def onItemClicked(self, item, column):
         parent = item.parent()
         if parent:
-            tipo = parent.text(0).split()[0]  # Emoji
+            tipo = parent.text(0).split()[0]
             nome = item.text(0).strip().split()[0]
             self.itemSelected.emit(tipo, nome)
 
@@ -1349,7 +2667,7 @@ class ProjectBrowser(QDockWidget):
 # ============================================================================
 
 class WorkflowPanel(QWidget):
-    """Pannello che guida l'utente attraverso gli step"""
+    """Pannello che guida l'utente attraverso gli step con icone professionali"""
 
     stepClicked = pyqtSignal(WorkflowStep)
 
@@ -1362,10 +2680,19 @@ class WorkflowPanel(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(5)
 
-        # Titolo
-        title = QLabel("📋 WORKFLOW")
+        # Titolo con icona
+        title_layout = QHBoxLayout()
+        title_icon = QLabel()
+        icon_pixmap = IconManager.get_pixmap('misc', 'list', 18)
+        if not icon_pixmap.isNull():
+            title_icon.setPixmap(icon_pixmap)
+        title_layout.addWidget(title_icon)
+
+        title = QLabel("WORKFLOW")
         title.setStyleSheet("font-weight: bold; font-size: 12px; color: #0066cc;")
-        layout.addWidget(title)
+        title_layout.addWidget(title)
+        title_layout.addStretch()
+        layout.addLayout(title_layout)
 
         # Step buttons
         self.step_buttons = {}
@@ -1373,6 +2700,7 @@ class WorkflowPanel(QWidget):
             btn = QPushButton(STEP_NAMES[step])
             btn.setCheckable(True)
             btn.setMinimumHeight(35)
+            btn.setIconSize(QSize(16, 16))
             btn.clicked.connect(lambda checked, s=step: self.onStepClicked(s))
             self.step_buttons[step] = btn
             layout.addWidget(btn)
@@ -1398,40 +2726,54 @@ class WorkflowPanel(QWidget):
         self.updateStyle()
 
     def updateStyle(self):
+        t = ThemeManager.THEMES[ThemeManager.current_theme()]
         for step, btn in self.step_buttons.items():
             if step in self.completed_steps:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #d4edda;
-                        border: 1px solid #28a745;
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {t['success']}22;
+                        border: 1px solid {t['success']};
                         border-radius: 4px;
                         text-align: left;
                         padding-left: 10px;
-                    }
+                        color: {t['text']};
+                    }}
                 """)
-                btn.setText("✓ " + STEP_NAMES[step])
+                # Usa icona check
+                check_icon = IconManager.get_icon('status', 'check-circle', 16)
+                btn.setIcon(check_icon)
+                btn.setText(STEP_NAMES[step])
             elif step == self.current_step:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #cce0ff;
-                        border: 2px solid #0066cc;
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {t['primary']}33;
+                        border: 2px solid {t['primary']};
                         border-radius: 4px;
                         font-weight: bold;
                         text-align: left;
                         padding-left: 10px;
-                    }
+                        color: {t['text']};
+                    }}
                 """)
-                btn.setText("▶ " + STEP_NAMES[step])
+                # Usa icona play
+                play_icon = IconManager.get_icon('misc', 'play', 16)
+                btn.setIcon(play_icon)
+                btn.setText(STEP_NAMES[step])
             else:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #f8f9fa;
-                        border: 1px solid #dee2e6;
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {t['surface']};
+                        border: 1px solid {t['border']};
                         border-radius: 4px;
                         text-align: left;
                         padding-left: 10px;
-                    }
+                        color: {t['text_secondary']};
+                    }}
+                    QPushButton:hover {{
+                        background-color: {t['hover']};
+                    }}
                 """)
+                btn.setIcon(QIcon())
                 btn.setText("   " + STEP_NAMES[step])
 
     def onStepClicked(self, step: WorkflowStep):
@@ -1443,7 +2785,15 @@ class WorkflowPanel(QWidget):
 # ============================================================================
 
 class QuickActionsPanel(QWidget):
-    """Pannello azioni rapide per nuovi utenti"""
+    """Pannello azioni rapide per nuovi utenti con icone professionali"""
+
+    # Mapping pulsanti -> icone
+    BUTTON_ICONS = {
+        'nuovo': ('actions', 'file-new'),
+        'apri': ('actions', 'folder-open'),
+        'esempio': ('elements', 'roof'),
+        'guida': ('misc', 'help-circle'),
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1451,11 +2801,20 @@ class QuickActionsPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Titolo
-        title = QLabel("🚀 AZIONI RAPIDE")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        # Titolo con icona
+        title_layout = QHBoxLayout()
+        title_layout.addStretch()
+        title_icon = QLabel()
+        icon_pixmap = IconManager.get_pixmap('misc', 'rocket', 24)
+        if not icon_pixmap.isNull():
+            title_icon.setPixmap(icon_pixmap)
+        title_layout.addWidget(title_icon)
+
+        title = QLabel("AZIONI RAPIDE")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a237e;")
+        title_layout.addWidget(title)
+        title_layout.addStretch()
+        layout.addLayout(title_layout)
 
         subtitle = QLabel("Seleziona un'azione per iniziare")
         subtitle.setStyleSheet("color: #666; margin-bottom: 20px;")
@@ -1466,13 +2825,13 @@ class QuickActionsPanel(QWidget):
         grid = QGridLayout()
         grid.setSpacing(15)
 
-        self.btn_nuovo = self.createBigButton("📄", "Nuovo Progetto",
+        self.btn_nuovo = self.createBigButton('nuovo', "Nuovo Progetto",
             "Crea un nuovo progetto con wizard guidato")
-        self.btn_apri = self.createBigButton("📂", "Apri Progetto",
+        self.btn_apri = self.createBigButton('apri', "Apri Progetto",
             "Apri un progetto esistente (.mur)")
-        self.btn_esempio = self.createBigButton("🏠", "Carica Esempio",
+        self.btn_esempio = self.createBigButton('esempio', "Carica Esempio",
             "Carica un edificio di esempio")
-        self.btn_guida = self.createBigButton("❓", "Guida Rapida",
+        self.btn_guida = self.createBigButton('guida', "Guida Rapida",
             "Visualizza la guida rapida")
 
         grid.addWidget(self.btn_nuovo, 0, 0)
@@ -1489,39 +2848,45 @@ class QuickActionsPanel(QWidget):
         info.setAlignment(Qt.AlignCenter)
         layout.addWidget(info)
 
-    def createBigButton(self, icon: str, title: str, desc: str) -> QPushButton:
+    def createBigButton(self, icon_key: str, title: str, desc: str) -> QPushButton:
+        t = ThemeManager.THEMES[ThemeManager.current_theme()]
         btn = QPushButton()
         btn.setMinimumSize(180, 120)
-        btn.setStyleSheet("""
-            QPushButton {
-                background-color: white;
-                border: 2px solid #dee2e6;
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['surface']};
+                border: 2px solid {t['border']};
                 border-radius: 10px;
                 font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #f8f9fa;
-                border-color: #0066cc;
-            }
-            QPushButton:pressed {
-                background-color: #e9ecef;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {t['hover']};
+                border-color: {t['primary']};
+            }}
+            QPushButton:pressed {{
+                background-color: {t['selection']};
+            }}
         """)
 
         layout = QVBoxLayout(btn)
 
-        icon_label = QLabel(icon)
-        icon_label.setStyleSheet("font-size: 32px;")
+        # Usa icona professionale
+        icon_label = QLabel()
+        if icon_key in self.BUTTON_ICONS:
+            category, name = self.BUTTON_ICONS[icon_key]
+            pixmap = IconManager.get_pixmap(category, name, 40)
+            if not pixmap.isNull():
+                icon_label.setPixmap(pixmap)
         icon_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(icon_label)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        title_label.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {t['text']};")
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
 
         desc_label = QLabel(desc)
-        desc_label.setStyleSheet("color: #666; font-size: 9px;")
+        desc_label.setStyleSheet(f"color: {t['text_secondary']}; font-size: 9px;")
         desc_label.setAlignment(Qt.AlignCenter)
         desc_label.setWordWrap(True)
         layout.addWidget(desc_label)
@@ -3553,19 +4918,43 @@ class Vista3DWidget(QWidget):
         self.offset_y = self.height() // 2 + 50
 
     def project3D(self, x: float, y: float, z: float) -> Tuple[float, float, float]:
-        """Proiezione 3D -> 2D con profondità per z-sorting"""
-        angle_h = math.radians(self.rotazione_h)
-        angle_v = math.radians(self.rotazione_v)
+        """
+        Proiezione 3D -> 2D con profondità per z-sorting.
+        Usa mathutils (da Blender) per trasformazioni ottimizzate se disponibile.
+        """
+        if MATHUTILS_AVAILABLE:
+            # === VERSIONE OTTIMIZZATA CON MATHUTILS ===
+            v = Vector((x, y, z))
 
-        # Rotazione orizzontale (attorno asse Z)
-        rx = x * math.cos(angle_h) - y * math.sin(angle_h)
-        ry = x * math.sin(angle_h) + y * math.cos(angle_h)
-        rz = z
+            # Rotazione con quaternioni (più efficiente e numericamente stabile)
+            angle_h = math.radians(self.rotazione_h)
+            angle_v = math.radians(self.rotazione_v)
 
-        # Rotazione verticale (attorno asse X)
-        ry2 = ry * math.cos(angle_v) - rz * math.sin(angle_v)
-        rz2 = ry * math.sin(angle_v) + rz * math.cos(angle_v)
+            # Quaternione per rotazione Z (orizzontale)
+            rot_z = Quaternion((0, 0, 1), angle_h)
+            # Quaternione per rotazione X (verticale)
+            rot_x = Quaternion((1, 0, 0), angle_v)
 
+            # Applica rotazioni (ordine: prima Z, poi X)
+            v = rot_z @ v
+            v = rot_x @ v
+
+            rx, ry2, rz2 = v.x, v.y, v.z
+        else:
+            # === FALLBACK: calcolo manuale ===
+            angle_h = math.radians(self.rotazione_h)
+            angle_v = math.radians(self.rotazione_v)
+
+            # Rotazione orizzontale (attorno asse Z)
+            rx = x * math.cos(angle_h) - y * math.sin(angle_h)
+            ry = x * math.sin(angle_h) + y * math.cos(angle_h)
+            rz = z
+
+            # Rotazione verticale (attorno asse X)
+            ry2 = ry * math.cos(angle_v) - rz * math.sin(angle_v)
+            rz2 = ry * math.sin(angle_v) + rz * math.cos(angle_v)
+
+        # Proiezione prospettica o isometrica
         if self.prospettiva:
             d = self.distanza_camera
             factor = d / (d + ry2) if (d + ry2) > 0.1 else 1
@@ -3587,18 +4976,11 @@ class Vista3DWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Sfondo gradiente
-        gradient = QColor(235, 240, 250)
-        gradient2 = QColor(200, 210, 225)
-        for i in range(self.height()):
-            t = i / self.height()
-            c = QColor(
-                int(gradient.red() * (1-t) + gradient2.red() * t),
-                int(gradient.green() * (1-t) + gradient2.green() * t),
-                int(gradient.blue() * (1-t) + gradient2.blue() * t)
-            )
-            painter.setPen(c)
-            painter.drawLine(0, i, self.width(), i)
+        # Sfondo gradiente (ottimizzato - singola operazione invece di 600+ drawLine)
+        gradient = QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0, QColor(235, 240, 250))
+        gradient.setColorAt(1, QColor(200, 210, 225))
+        painter.fillRect(self.rect(), QBrush(gradient))
 
         if not self.progetto:
             painter.setPen(QColor(100, 100, 100))
@@ -4796,6 +6178,293 @@ class PushoverWidget(QWidget):
 
 
 # ============================================================================
+# COORDINATE INPUT BAR - INPUT NUMERICO DIRETTO
+# ============================================================================
+
+class CoordinateInputBar(QWidget):
+    """Barra di input coordinate per inserimento numerico diretto - stile CAD"""
+
+    coordinateEntered = pyqtSignal(float, float)  # x, y assolute
+    relativeEntered = pyqtSignal(float, float)    # dx, dy relative
+    polarEntered = pyqtSignal(float, float)       # lunghezza, angolo
+    commandEntered = pyqtSignal(str)              # comando testuale
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(36)
+        self.canvas = None  # Riferimento al canvas
+        self.last_point = None  # Ultimo punto inserito (per coordinate relative)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(10)
+
+        # Etichetta modalità
+        self.mode_label = QLabel("COMANDO:")
+        self.mode_label.setStyleSheet("font-weight: bold; color: #0066cc; min-width: 80px;")
+        layout.addWidget(self.mode_label)
+
+        # Campo input principale
+        self.input_field = QLineEdit()
+        self.input_field.setPlaceholderText("Inserisci coordinate (es: 5,3 oppure @2,0 oppure <45,5)")
+        self.input_field.setStyleSheet("""
+            QLineEdit {
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                padding: 4px 8px;
+                border: 1px solid #0066cc;
+                border-radius: 3px;
+                background-color: #f0f7ff;
+            }
+            QLineEdit:focus {
+                border: 2px solid #0066cc;
+                background-color: white;
+            }
+        """)
+        self.input_field.returnPressed.connect(self.processInput)
+        layout.addWidget(self.input_field, 1)
+
+        # Coordinate correnti (display)
+        self.coord_display = QLabel("X: 0.00  Y: 0.00")
+        self.coord_display.setStyleSheet("""
+            font-family: 'Consolas', monospace;
+            font-size: 11px;
+            color: #666;
+            background-color: #f5f5f5;
+            padding: 4px 10px;
+            border-radius: 3px;
+            min-width: 140px;
+        """)
+        layout.addWidget(self.coord_display)
+
+        # Lunghezza corrente (per disegno in corso)
+        self.length_display = QLabel("L: --")
+        self.length_display.setStyleSheet("""
+            font-family: 'Consolas', monospace;
+            font-size: 11px;
+            color: #666;
+            background-color: #f5f5f5;
+            padding: 4px 10px;
+            border-radius: 3px;
+            min-width: 80px;
+        """)
+        layout.addWidget(self.length_display)
+
+        # Angolo corrente
+        self.angle_display = QLabel("A: --")
+        self.angle_display.setStyleSheet("""
+            font-family: 'Consolas', monospace;
+            font-size: 11px;
+            color: #666;
+            background-color: #f5f5f5;
+            padding: 4px 10px;
+            border-radius: 3px;
+            min-width: 70px;
+        """)
+        layout.addWidget(self.angle_display)
+
+        # Snap attivo
+        self.snap_indicator = QLabel("SNAP")
+        self.snap_indicator.setStyleSheet("""
+            font-size: 10px;
+            font-weight: bold;
+            color: white;
+            background-color: #28a745;
+            padding: 4px 8px;
+            border-radius: 3px;
+        """)
+        layout.addWidget(self.snap_indicator)
+
+        # Help button
+        help_btn = QPushButton("?")
+        help_btn.setFixedSize(24, 24)
+        help_btn.setToolTip("Aiuto input coordinate")
+        help_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border-radius: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #5a6268; }
+        """)
+        help_btn.clicked.connect(self.showHelp)
+        layout.addWidget(help_btn)
+
+        self.setStyleSheet("background-color: #e8f4fc; border-top: 1px solid #ccc;")
+
+    def setCanvas(self, canvas):
+        """Collega il canvas per aggiornare le coordinate"""
+        self.canvas = canvas
+
+    def updateCoordinates(self, x: float, y: float):
+        """Aggiorna display coordinate correnti"""
+        self.coord_display.setText(f"X: {x:.2f}  Y: {y:.2f}")
+
+    def updateMeasurements(self, length: float = None, angle: float = None):
+        """Aggiorna display lunghezza e angolo"""
+        if length is not None:
+            self.length_display.setText(f"L: {length:.2f}m")
+        else:
+            self.length_display.setText("L: --")
+
+        if angle is not None:
+            self.angle_display.setText(f"A: {angle:.1f}°")
+        else:
+            self.angle_display.setText("A: --")
+
+    def updateSnapIndicator(self, snap_type: str = None):
+        """Aggiorna indicatore snap"""
+        if snap_type:
+            colors = {
+                'endpoint': '#dc3545',
+                'midpoint': '#28a745',
+                'intersection': '#fd7e14',
+                'perpendicular': '#007bff',
+                'grid': '#6c757d'
+            }
+            self.snap_indicator.setText(snap_type.upper()[:4])
+            self.snap_indicator.setStyleSheet(f"""
+                font-size: 10px;
+                font-weight: bold;
+                color: white;
+                background-color: {colors.get(snap_type, '#6c757d')};
+                padding: 4px 8px;
+                border-radius: 3px;
+            """)
+        else:
+            self.snap_indicator.setText("SNAP")
+            self.snap_indicator.setStyleSheet("""
+                font-size: 10px;
+                font-weight: bold;
+                color: white;
+                background-color: #28a745;
+                padding: 4px 8px;
+                border-radius: 3px;
+            """)
+
+    def processInput(self):
+        """Processa l'input dell'utente"""
+        text = self.input_field.text().strip()
+        if not text:
+            return
+
+        self.input_field.clear()
+
+        try:
+            # Formato: @dx,dy (coordinate relative)
+            if text.startswith('@'):
+                parts = text[1:].split(',')
+                if len(parts) == 2:
+                    dx = float(parts[0].strip())
+                    dy = float(parts[1].strip())
+                    self.relativeEntered.emit(dx, dy)
+                    return
+
+            # Formato: <angolo,lunghezza (polare)
+            if text.startswith('<'):
+                parts = text[1:].split(',')
+                if len(parts) == 2:
+                    angle = float(parts[0].strip())
+                    length = float(parts[1].strip())
+                    self.polarEntered.emit(length, angle)
+                    return
+
+            # Formato: x,y (coordinate assolute)
+            if ',' in text:
+                parts = text.split(',')
+                if len(parts) == 2:
+                    x = float(parts[0].strip())
+                    y = float(parts[1].strip())
+                    self.coordinateEntered.emit(x, y)
+                    return
+
+            # Formato: numero singolo (lunghezza nella direzione corrente)
+            try:
+                length = float(text)
+                # Emette come polare con angolo attuale
+                self.polarEntered.emit(length, 0)
+                return
+            except ValueError:
+                pass
+
+            # Comando testuale
+            self.commandEntered.emit(text.upper())
+
+        except ValueError as e:
+            self.showError(f"Input non valido: {text}")
+
+    def showError(self, message: str):
+        """Mostra errore nell'input"""
+        self.input_field.setStyleSheet("""
+            QLineEdit {
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                padding: 4px 8px;
+                border: 2px solid #dc3545;
+                border-radius: 3px;
+                background-color: #ffe6e6;
+            }
+        """)
+        self.input_field.setPlaceholderText(message)
+        # Reset style after 2 seconds
+        QTimer.singleShot(2000, self.resetInputStyle)
+
+    def resetInputStyle(self):
+        """Ripristina lo stile dell'input"""
+        self.input_field.setStyleSheet("""
+            QLineEdit {
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                padding: 4px 8px;
+                border: 1px solid #0066cc;
+                border-radius: 3px;
+                background-color: #f0f7ff;
+            }
+            QLineEdit:focus {
+                border: 2px solid #0066cc;
+                background-color: white;
+            }
+        """)
+        self.input_field.setPlaceholderText("Inserisci coordinate (es: 5,3 oppure @2,0 oppure <45,5)")
+
+    def showHelp(self):
+        """Mostra aiuto per l'input coordinate"""
+        help_text = """
+<h3>Input Coordinate</h3>
+<table>
+<tr><td><b>x,y</b></td><td>Coordinate assolute (es: 5,3)</td></tr>
+<tr><td><b>@dx,dy</b></td><td>Coordinate relative all'ultimo punto (es: @2,0)</td></tr>
+<tr><td><b>&lt;angolo,lunghezza</b></td><td>Coordinate polari (es: &lt;45,5)</td></tr>
+<tr><td><b>numero</b></td><td>Lunghezza nella direzione corrente (es: 5)</td></tr>
+</table>
+
+<h3>Comandi</h3>
+<table>
+<tr><td><b>ESC</b></td><td>Annulla operazione corrente</td></tr>
+<tr><td><b>ENTER</b></td><td>Chiude poligono (in modalità poligono)</td></tr>
+<tr><td><b>DELETE</b></td><td>Elimina elemento selezionato</td></tr>
+</table>
+
+<h3>Snap</h3>
+<p>Il sistema aggancia automaticamente a:</p>
+<ul>
+<li><span style="color: red;">●</span> <b>Endpoint</b> - Estremi dei muri</li>
+<li><span style="color: green;">●</span> <b>Midpoint</b> - Punto medio dei muri</li>
+<li><span style="color: orange;">●</span> <b>Intersection</b> - Intersezione tra muri</li>
+<li><span style="color: blue;">●</span> <b>Perpendicular</b> - Punto perpendicolare</li>
+<li><span style="color: gray;">●</span> <b>Grid</b> - Griglia</li>
+</ul>
+"""
+        QMessageBox.information(self, "Aiuto Input Coordinate", help_text)
+
+    def setFocusToInput(self):
+        """Porta il focus all'input field"""
+        self.input_field.setFocus()
+        self.input_field.selectAll()
+
+
+# ============================================================================
 # VALIDAZIONE GEOMETRIA
 # ============================================================================
 
@@ -4820,47 +6489,163 @@ class GeometryValidator:
     def validaMuriChiusi(progetto: Progetto, tolleranza: float = 0.1) -> List[str]:
         """Verifica che i muri formino contorni chiusi"""
         warnings = []
-        # Trova estremi muri
-        estremi = []
+        # Trova estremi muri per ogni piano
+        piano_muri = {}
         for m in progetto.muri:
-            estremi.append((m.x1, m.y1, m.nome, "inizio"))
-            estremi.append((m.x2, m.y2, m.nome, "fine"))
+            z = round(m.z, 1)
+            if z not in piano_muri:
+                piano_muri[z] = []
+            piano_muri[z].append(m)
 
-        # Conta connessioni per ogni estremo
-        for i, (x1, y1, nome1, tipo1) in enumerate(estremi):
-            connesso = False
-            for j, (x2, y2, nome2, tipo2) in enumerate(estremi):
-                if i != j and nome1 != nome2:
-                    dist = math.sqrt((x1-x2)**2 + (y1-y2)**2)
-                    if dist < tolleranza:
-                        connesso = True
-                        break
-            if not connesso:
-                warnings.append(f"Muro {nome1} ({tipo1}) non connesso a ({x1:.2f}, {y1:.2f})")
+        for z, muri in piano_muri.items():
+            estremi = []
+            for m in muri:
+                estremi.append((m.x1, m.y1, m.nome, "inizio"))
+                estremi.append((m.x2, m.y2, m.nome, "fine"))
+
+            # Conta connessioni per ogni estremo
+            for i, (x1, y1, nome1, tipo1) in enumerate(estremi):
+                connesso = False
+                for j, (x2, y2, nome2, tipo2) in enumerate(estremi):
+                    if i != j and nome1 != nome2:
+                        dist = math.sqrt((x1-x2)**2 + (y1-y2)**2)
+                        if dist < tolleranza:
+                            connesso = True
+                            break
+                if not connesso:
+                    warnings.append(f"Muro {nome1} ({tipo1}) non connesso a z={z:.1f}")
 
         return warnings
 
     @staticmethod
+    def _segmentsOverlap(m1: Muro, m2: Muro, tolleranza: float = 0.05) -> bool:
+        """Verifica se due segmenti di muro sono sovrapposti o paralleli troppo vicini"""
+        # Stessa quota z?
+        if abs(m1.z - m2.z) > 0.1:
+            return False
+
+        # Calcola vettori direzione
+        d1x, d1y = m1.x2 - m1.x1, m1.y2 - m1.y1
+        d2x, d2y = m2.x2 - m2.x1, m2.y2 - m2.y1
+        len1 = math.sqrt(d1x*d1x + d1y*d1y)
+        len2 = math.sqrt(d2x*d2x + d2y*d2y)
+
+        if len1 < 0.01 or len2 < 0.01:
+            return False
+
+        # Normalizza
+        d1x, d1y = d1x/len1, d1y/len1
+        d2x, d2y = d2x/len2, d2y/len2
+
+        # Cross product per verificare se sono paralleli
+        cross = abs(d1x * d2y - d1y * d2x)
+        if cross > 0.1:  # Non paralleli
+            return False
+
+        # Sono paralleli - verifica distanza e sovrapposizione
+        # Proietta m2.start su linea m1
+        px, py = m2.x1 - m1.x1, m2.y1 - m1.y1
+        # Distanza perpendicolare
+        dist = abs(px * (-d1y) + py * d1x)
+        if dist > tolleranza + (m1.spessore + m2.spessore) / 2:
+            return False
+
+        # Verifica sovrapposizione lungo la direzione
+        proj1_start = 0
+        proj1_end = len1
+        proj2_start = px * d1x + py * d1y
+        px2, py2 = m2.x2 - m1.x1, m2.y2 - m1.y1
+        proj2_end = px2 * d1x + py2 * d1y
+
+        if proj2_start > proj2_end:
+            proj2_start, proj2_end = proj2_end, proj2_start
+
+        # Sovrapposizione?
+        overlap_start = max(proj1_start, proj2_start)
+        overlap_end = min(proj1_end, proj2_end)
+
+        return overlap_end > overlap_start + tolleranza
+
+    @staticmethod
     def validaSovrapposizioni(progetto: Progetto) -> List[str]:
-        """Verifica sovrapposizioni tra muri"""
+        """Verifica sovrapposizioni tra muri con algoritmo migliorato"""
         warnings = []
         muri = progetto.muri
         for i, m1 in enumerate(muri):
             for m2 in muri[i+1:]:
-                # Sovrapposizione semplificata: stesso segmento
-                if abs(m1.x1 - m2.x1) < 0.1 and abs(m1.y1 - m2.y1) < 0.1:
-                    if abs(m1.x2 - m2.x2) < 0.1 and abs(m1.y2 - m2.y2) < 0.1:
-                        warnings.append(f"Muri {m1.nome} e {m2.nome} sovrapposti")
+                if GeometryValidator._segmentsOverlap(m1, m2):
+                    warnings.append(f"Muri {m1.nome} e {m2.nome} si sovrappongono")
+        return warnings
+
+    @staticmethod
+    def validaLunghezzaMinima(progetto: Progetto, min_length: float = 0.3) -> List[str]:
+        """Verifica lunghezza minima dei muri"""
+        warnings = []
+        for m in progetto.muri:
+            if m.lunghezza < min_length:
+                warnings.append(f"Muro {m.nome} troppo corto ({m.lunghezza:.2f}m < {min_length}m)")
+        return warnings
+
+    @staticmethod
+    def validaAngoliMuri(progetto: Progetto, tolleranza_angolo: float = 5.0) -> List[str]:
+        """Verifica angoli tra muri connessi (idealmente 90° o multipli)"""
+        warnings = []
+        tolleranza = 0.15  # m per connessione
+
+        for i, m1 in enumerate(progetto.muri):
+            for m2 in progetto.muri[i+1:]:
+                if abs(m1.z - m2.z) > 0.1:
+                    continue
+
+                # Verifica connessione agli estremi
+                connections = []
+                for p1 in [(m1.x1, m1.y1), (m1.x2, m1.y2)]:
+                    for p2 in [(m2.x1, m2.y1), (m2.x2, m2.y2)]:
+                        if math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2) < tolleranza:
+                            connections.append((p1, p2))
+
+                if connections:
+                    # Calcola angolo tra i muri
+                    ang1 = math.degrees(math.atan2(m1.y2 - m1.y1, m1.x2 - m1.x1))
+                    ang2 = math.degrees(math.atan2(m2.y2 - m2.y1, m2.x2 - m2.x1))
+                    delta = abs(ang1 - ang2)
+                    if delta > 180:
+                        delta = 360 - delta
+
+                    # Verifica se vicino a multiplo di 90°
+                    resto = delta % 90
+                    if resto > tolleranza_angolo and resto < (90 - tolleranza_angolo):
+                        warnings.append(f"Angolo tra {m1.nome} e {m2.nome}: {delta:.1f}° (non ortogonale)")
+
         return warnings
 
     @staticmethod
     def validaTutto(progetto: Progetto) -> Dict[str, List[str]]:
         """Esegue tutte le validazioni"""
         return {
-            'aperture': GeometryValidator.validaAperture(progetto),
+            'errori': GeometryValidator.validaAperture(progetto),
             'chiusura': GeometryValidator.validaMuriChiusi(progetto),
-            'sovrapposizioni': GeometryValidator.validaSovrapposizioni(progetto)
+            'sovrapposizioni': GeometryValidator.validaSovrapposizioni(progetto),
+            'lunghezza': GeometryValidator.validaLunghezzaMinima(progetto),
+            'angoli': GeometryValidator.validaAngoliMuri(progetto)
         }
+
+    @staticmethod
+    def validaInTempoReale(progetto: Progetto, nuovo_muro: Tuple[float, float, float, float]) -> Optional[str]:
+        """Validazione in tempo reale mentre si disegna"""
+        x1, y1, x2, y2 = nuovo_muro
+        lunghezza = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+
+        if lunghezza < 0.3:
+            return "Muro troppo corto (min 0.3m)"
+
+        # Verifica sovrapposizioni con muri esistenti
+        temp_muro = Muro("temp", x1, y1, x2, y2, 0.3, 3.0)
+        for m in progetto.muri:
+            if GeometryValidator._segmentsOverlap(temp_muro, m):
+                return f"Sovrapposizione con {m.nome}"
+
+        return None
 
 
 # ============================================================================
@@ -4874,6 +6659,7 @@ class DrawingCanvas(QWidget):
     selectionChanged = pyqtSignal(object)
     muriChanged = pyqtSignal()
     requestApertura = pyqtSignal(str, float)  # nome_muro, posizione
+    coordinateUpdate = pyqtSignal(float, float, float, float, str)  # x, y, length, angle, snap_type
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4935,6 +6721,45 @@ class DrawingCanvas(QWidget):
         # Undo stack (opzionale, passato dal parent)
         self.undo_stack = None
 
+        # === SNAP INTELLIGENTE ===
+        self.snap_enabled = True
+        self.snap_radius = 0.3  # metri - raggio di attrazione snap
+        self.snap_to_endpoint = True
+        self.snap_to_midpoint = True
+        self.snap_to_intersection = True
+        self.snap_to_perpendicular = True
+        self.snap_to_grid = True
+        self.current_snap_point = None  # Punto di snap attivo (x, y, tipo)
+        self.snap_types = {
+            'endpoint': QColor(255, 0, 0),      # Rosso - estremi
+            'midpoint': QColor(0, 255, 0),      # Verde - punto medio
+            'intersection': QColor(255, 165, 0), # Arancione - intersezione
+            'perpendicular': QColor(0, 0, 255),  # Blu - perpendicolare
+            'grid': QColor(128, 128, 128),       # Grigio - griglia
+        }
+
+        # === QUOTATURA ===
+        self.show_dimensions = True
+        self.dimension_font = QFont('Segoe UI', 8)
+
+        # === INPUT NUMERICO ===
+        self.numeric_input_active = False
+        self.numeric_input_buffer = ""
+
+        # === THROTTLE SNAP (Performance) ===
+        self.snap_timer = QTimer()
+        self.snap_timer.setSingleShot(True)
+        self.snap_timer.timeout.connect(self._executeSnapUpdate)
+        self.pending_snap_event = None  # (screen_x, screen_y)
+        self.snap_throttle_ms = 16  # ~60fps max per calcoli snap
+
+        # === CACHE GRIGLIA (Performance) ===
+        self._grid_path = None  # QPainterPath cachato
+        self._grid_params = None  # (scala, passo_griglia, width, height, offset_x, offset_y)
+
+        # === GEOMETRY ENGINE (Spatial Indexing) ===
+        self.geometry_engine = GeometryEngine()
+
         # Stile
         self.setStyleSheet("background-color: white;")
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -4942,6 +6767,11 @@ class DrawingCanvas(QWidget):
 
     def setProgetto(self, progetto: Progetto):
         self.progetto = progetto
+        # Ricostruisci spatial index per snap veloce
+        if progetto and progetto.muri:
+            self.geometry_engine.rebuild_index(progetto.muri)
+        else:
+            self.geometry_engine.invalidate()
         self.update()
 
     def setStrumento(self, strumento: str):
@@ -4964,6 +6794,210 @@ class DrawingCanvas(QWidget):
             x = round(x / self.passo_griglia) * self.passo_griglia
             y = round(y / self.passo_griglia) * self.passo_griglia
         return x, y
+
+    def getSmartSnap(self, x: float, y: float) -> Tuple[float, float, Optional[str]]:
+        """
+        Trova il punto di snap più vicino con priorità:
+        1. Endpoint (estremi muri)
+        2. Intersection (intersezioni tra muri)
+        3. Midpoint (punto medio muri)
+        4. Perpendicular (proiezione perpendicolare)
+        5. Grid (griglia)
+
+        Usa GeometryEngine con spatial indexing per query O(log n) invece di O(n²).
+        Ritorna: (snap_x, snap_y, snap_type) o coordinate originali se nessuno snap
+        """
+        if not self.snap_enabled or not self.progetto:
+            gx, gy = self.snapToGrid(x, y)
+            return gx, gy, 'grid' if self.snap_to_grid else None
+
+        best_snap = None
+        best_dist = self.snap_radius
+
+        # Ottieni muri del piano corrente
+        z_piano = self.piano_corrente * (self.progetto.altezza_piano if self.progetto else 3.0)
+        muri_piano = [m for m in self.progetto.muri if abs(m.z - z_piano) <= 0.1]
+
+        # === USA GEOMETRY ENGINE SE DISPONIBILE ===
+        if self.geometry_engine.is_valid and SHAPELY_AVAILABLE:
+            # Trova muri vicini con spatial index O(log n)
+            nearby_walls = self.geometry_engine.find_near_point(x, y, self.snap_radius * 2)
+            nearby_muri = [w[0] for w in nearby_walls if abs(w[0].z - z_piano) <= 0.1]
+
+            # 1. SNAP ENDPOINT (usa solo muri vicini)
+            if self.snap_to_endpoint:
+                for muro in nearby_muri:
+                    for px, py in [(muro.x1, muro.y1), (muro.x2, muro.y2)]:
+                        dist = math.sqrt((x - px)**2 + (y - py)**2)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_snap = (px, py, 'endpoint')
+
+            # 2. SNAP INTERSECTION (usa Shapely per calcolo veloce)
+            if self.snap_to_intersection and len(nearby_muri) > 1:
+                for i, m1 in enumerate(nearby_muri):
+                    for m2 in nearby_muri[i+1:]:
+                        ix, iy = self._lineIntersection(
+                            m1.x1, m1.y1, m1.x2, m1.y2,
+                            m2.x1, m2.y1, m2.x2, m2.y2
+                        )
+                        if ix is not None:
+                            dist = math.sqrt((x - ix)**2 + (y - iy)**2)
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_snap = (ix, iy, 'intersection')
+
+            # 3. SNAP MIDPOINT
+            if self.snap_to_midpoint:
+                for muro in nearby_muri:
+                    mx = (muro.x1 + muro.x2) / 2
+                    my = (muro.y1 + muro.y2) / 2
+                    dist = math.sqrt((x - mx)**2 + (y - my)**2)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_snap = (mx, my, 'midpoint')
+
+            # 4. SNAP PERPENDICULAR
+            if self.snap_to_perpendicular and self.punto_inizio:
+                for muro in nearby_muri:
+                    px, py = self._perpendicularPoint(
+                        self.punto_inizio[0], self.punto_inizio[1],
+                        muro.x1, muro.y1, muro.x2, muro.y2
+                    )
+                    if px is not None:
+                        dist = math.sqrt((x - px)**2 + (y - py)**2)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_snap = (px, py, 'perpendicular')
+
+        else:
+            # === FALLBACK: metodo originale O(n) ===
+            # 1. SNAP ENDPOINT (estremi muri) - priorità alta
+            if self.snap_to_endpoint:
+                for muro in muri_piano:
+                    for px, py in [(muro.x1, muro.y1), (muro.x2, muro.y2)]:
+                        dist = math.sqrt((x - px)**2 + (y - py)**2)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_snap = (px, py, 'endpoint')
+
+            # 2. SNAP INTERSECTION (intersezioni tra muri)
+            if self.snap_to_intersection:
+                for i, m1 in enumerate(muri_piano):
+                    for m2 in muri_piano[i+1:]:
+                        ix, iy = self._lineIntersection(
+                            m1.x1, m1.y1, m1.x2, m1.y2,
+                            m2.x1, m2.y1, m2.x2, m2.y2
+                        )
+                        if ix is not None:
+                            dist = math.sqrt((x - ix)**2 + (y - iy)**2)
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_snap = (ix, iy, 'intersection')
+
+            # 3. SNAP MIDPOINT (punto medio muri)
+            if self.snap_to_midpoint:
+                for muro in muri_piano:
+                    mx = (muro.x1 + muro.x2) / 2
+                    my = (muro.y1 + muro.y2) / 2
+                    dist = math.sqrt((x - mx)**2 + (y - my)**2)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_snap = (mx, my, 'midpoint')
+
+            # 4. SNAP PERPENDICULAR (proiezione perpendicolare su muro)
+            if self.snap_to_perpendicular and self.punto_inizio:
+                for muro in muri_piano:
+                    px, py = self._perpendicularPoint(
+                        self.punto_inizio[0], self.punto_inizio[1],
+                        muro.x1, muro.y1, muro.x2, muro.y2
+                    )
+                    if px is not None:
+                        dist = math.sqrt((x - px)**2 + (y - py)**2)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_snap = (px, py, 'perpendicular')
+
+        # 5. GRID SNAP (fallback)
+        if best_snap:
+            return best_snap
+        elif self.snap_to_grid:
+            gx, gy = self.snapToGrid(x, y)
+            return gx, gy, 'grid'
+        else:
+            return x, y, None
+
+    def _lineIntersection(self, x1, y1, x2, y2, x3, y3, x4, y4):
+        """Calcola intersezione tra due segmenti. Ritorna None se non si intersecano."""
+        denom = (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4)
+        if abs(denom) < 1e-10:
+            return None, None
+
+        t = ((x1-x3)*(y3-y4) - (y1-y3)*(x3-x4)) / denom
+        u = -((x1-x2)*(y1-y3) - (y1-y2)*(x1-x3)) / denom
+
+        # Verifica che l'intersezione sia dentro entrambi i segmenti
+        if 0 <= t <= 1 and 0 <= u <= 1:
+            ix = x1 + t*(x2-x1)
+            iy = y1 + t*(y2-y1)
+            return ix, iy
+        return None, None
+
+    def _perpendicularPoint(self, px, py, x1, y1, x2, y2):
+        """Trova la proiezione perpendicolare di (px,py) sul segmento (x1,y1)-(x2,y2)."""
+        dx = x2 - x1
+        dy = y2 - y1
+        length_sq = dx*dx + dy*dy
+        if length_sq < 1e-10:
+            return None, None
+
+        t = max(0, min(1, ((px-x1)*dx + (py-y1)*dy) / length_sq))
+        proj_x = x1 + t * dx
+        proj_y = y1 + t * dy
+        return proj_x, proj_y
+
+    def drawSnapIndicator(self, painter):
+        """Disegna l'indicatore visivo del punto di snap corrente."""
+        if not self.current_snap_point:
+            return
+
+        x, y, snap_type = self.current_snap_point
+        sx, sy = self.worldToScreen(x, y)
+
+        # Colore in base al tipo di snap
+        color = self.snap_types.get(snap_type, QColor(255, 255, 0))
+
+        painter.setPen(QPen(color, 2))
+        painter.setBrush(Qt.NoBrush)
+
+        size = 8
+        if snap_type == 'endpoint':
+            # Quadrato
+            painter.drawRect(sx - size, sy - size, size*2, size*2)
+        elif snap_type == 'midpoint':
+            # Triangolo
+            path = QPainterPath()
+            path.moveTo(sx, sy - size)
+            path.lineTo(sx - size, sy + size)
+            path.lineTo(sx + size, sy + size)
+            path.closeSubpath()
+            painter.drawPath(path)
+        elif snap_type == 'intersection':
+            # X
+            painter.drawLine(sx - size, sy - size, sx + size, sy + size)
+            painter.drawLine(sx - size, sy + size, sx + size, sy - size)
+        elif snap_type == 'perpendicular':
+            # Simbolo perpendicolare (angolo retto)
+            painter.drawLine(sx - size, sy, sx, sy)
+            painter.drawLine(sx, sy, sx, sy - size)
+        else:
+            # Cerchio per grid
+            painter.drawEllipse(sx - size//2, sy - size//2, size, size)
+
+        # Label del tipo di snap
+        painter.setPen(color)
+        painter.setFont(QFont('Segoe UI', 7))
+        painter.drawText(sx + 12, sy - 5, snap_type.upper())
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -5024,26 +7058,39 @@ class DrawingCanvas(QWidget):
         self.drawToolInfo(painter)
 
     def drawGrid(self, painter):
-        painter.setPen(QPen(QColor(230, 230, 230), 1))
-
-        # Calcola range visibile
+        """Disegna griglia con caching QPainterPath per performance"""
         w, h = self.width(), self.height()
-        x1, y1 = self.screenToWorld(0, h)
-        x2, y2 = self.screenToWorld(w, 0)
+        current_params = (self.scala, self.passo_griglia, w, h, self.offset_x, self.offset_y)
 
-        # Linee verticali
-        x = math.floor(x1 / self.passo_griglia) * self.passo_griglia
-        while x <= x2:
-            sx, _ = self.worldToScreen(x, 0)
-            painter.drawLine(sx, 0, sx, h)
-            x += self.passo_griglia
+        # Controlla se la cache è valida
+        if self._grid_path is None or self._grid_params != current_params:
+            # Ricostruisci la griglia in un QPainterPath
+            self._grid_path = QPainterPath()
+            self._grid_params = current_params
 
-        # Linee orizzontali
-        y = math.floor(y1 / self.passo_griglia) * self.passo_griglia
-        while y <= y2:
-            _, sy = self.worldToScreen(0, y)
-            painter.drawLine(0, sy, w, sy)
-            y += self.passo_griglia
+            # Calcola range visibile
+            x1, y1 = self.screenToWorld(0, h)
+            x2, y2 = self.screenToWorld(w, 0)
+
+            # Linee verticali
+            x = math.floor(x1 / self.passo_griglia) * self.passo_griglia
+            while x <= x2:
+                sx, _ = self.worldToScreen(x, 0)
+                self._grid_path.moveTo(sx, 0)
+                self._grid_path.lineTo(sx, h)
+                x += self.passo_griglia
+
+            # Linee orizzontali
+            y = math.floor(y1 / self.passo_griglia) * self.passo_griglia
+            while y <= y2:
+                _, sy = self.worldToScreen(0, y)
+                self._grid_path.moveTo(0, sy)
+                self._grid_path.lineTo(w, sy)
+                y += self.passo_griglia
+
+        # Disegna il path cachato in una singola operazione
+        painter.setPen(QPen(QColor(230, 230, 230), 1))
+        painter.drawPath(self._grid_path)
 
     def drawAxes(self, painter):
         # Asse X (rosso)
@@ -5320,13 +7367,58 @@ class DrawingCanvas(QWidget):
 
         # Istruzioni
         istruzioni = {
-            'muro': "Click: inizio | Click: fine | ESC/RClick: annulla",
-            'rettangolo': "Click: primo angolo | Click: angolo opposto",
+            'muro': "Click: inizio | Click: fine | ESC/RClick: annulla | Tab: input numerico",
+            'rettangolo': "Click: primo angolo | Click: angolo opposto | Tab: input numerico",
             'misura': "Click: inizio | Click: fine",
-            'select': "Click: seleziona | Ctrl+C: copia | Ctrl+V: incolla"
+            'select': "Click: seleziona | Ctrl+C: copia | Ctrl+V: incolla",
+            'polygon': "Click: vertici | Doppio-click/Enter: chiudi | ESC: annulla"
         }
         if self.strumento in istruzioni:
             painter.drawText(10, self.height() - 10, istruzioni[self.strumento])
+
+        # Indicatore snap intelligente
+        self.drawSnapIndicator(painter)
+
+        # Quotatura automatica dei muri
+        if self.show_dimensions and self.progetto:
+            self.drawDimensions(painter)
+
+    def drawDimensions(self, painter):
+        """Disegna le quote automatiche sui muri."""
+        if not self.progetto:
+            return
+
+        painter.setFont(self.dimension_font)
+        z_piano = self.piano_corrente * (self.progetto.altezza_piano if self.progetto else 3.0)
+
+        for muro in self.progetto.muri:
+            if abs(muro.z - z_piano) > 0.1:
+                continue
+
+            # Calcola punto medio e lunghezza
+            mx = (muro.x1 + muro.x2) / 2
+            my = (muro.y1 + muro.y2) / 2
+            lunghezza = math.sqrt((muro.x2 - muro.x1)**2 + (muro.y2 - muro.y1)**2)
+
+            # Posizione schermo
+            sx, sy = self.worldToScreen(mx, my)
+
+            # Offset perpendicolare per non sovrapporre al muro
+            dx = muro.x2 - muro.x1
+            dy = muro.y2 - muro.y1
+            length = math.sqrt(dx*dx + dy*dy)
+            if length > 0:
+                # Normale al muro
+                nx = -dy / length
+                ny = dx / length
+                offset = 15  # pixel
+                sx += int(nx * offset)
+                sy -= int(ny * offset)
+
+            # Disegna quota
+            text = f"{lunghezza:.2f}m"
+            painter.setPen(QColor(100, 100, 100))
+            painter.drawText(sx - 20, sy, text)
 
     def mousePressEvent(self, event):
         # Pan con middle mouse button
@@ -5338,7 +7430,11 @@ class DrawingCanvas(QWidget):
 
         if event.button() == Qt.LeftButton:
             wx, wy = self.screenToWorld(event.x(), event.y())
-            wx, wy = self.snapToGrid(wx, wy)
+            # Usa Smart Snap se abilitato
+            if self.snap_enabled:
+                wx, wy, snap_type = self.getSmartSnap(wx, wy)
+            else:
+                wx, wy = self.snapToGrid(wx, wy)
 
             # Multi-selezione con Ctrl
             ctrl_pressed = event.modifiers() == Qt.ControlModifier
@@ -5410,10 +7506,7 @@ class DrawingCanvas(QWidget):
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):
-        wx, wy = self.screenToWorld(event.x(), event.y())
-        wx, wy = self.snapToGrid(wx, wy)
-
-        # Pan con middle mouse
+        # Pan con middle mouse - sempre immediato (no throttle)
         if self.panning and self.pan_start:
             dx = event.x() - self.pan_start[0]
             dy = event.y() - self.pan_start[1]
@@ -5422,6 +7515,51 @@ class DrawingCanvas(QWidget):
             self.pan_start = (event.x(), event.y())
             self.update()
             return
+
+        # Salva posizione e avvia timer throttle per calcoli snap costosi
+        self.pending_snap_event = (event.x(), event.y())
+        if not self.snap_timer.isActive():
+            self.snap_timer.start(self.snap_throttle_ms)
+
+    def _executeSnapUpdate(self):
+        """Esegue calcoli snap throttled - chiamato dal timer"""
+        if self.pending_snap_event is None:
+            return
+
+        screen_x, screen_y = self.pending_snap_event
+        wx, wy = self.screenToWorld(screen_x, screen_y)
+        snap_type = None
+
+        # Usa Smart Snap se abilitato
+        if self.snap_enabled:
+            snap_x, snap_y, snap_type = self.getSmartSnap(wx, wy)
+            if snap_type:
+                self.current_snap_point = (snap_x, snap_y, snap_type)
+                wx, wy = snap_x, snap_y
+            else:
+                self.current_snap_point = None
+                wx, wy = self.snapToGrid(wx, wy)
+        else:
+            self.current_snap_point = None
+            wx, wy = self.snapToGrid(wx, wy)
+
+        # Calcola lunghezza e angolo se c'è un punto iniziale
+        length = -1.0
+        angle = -1.0
+        if self.punto_inizio:
+            dx = wx - self.punto_inizio[0]
+            dy = wy - self.punto_inizio[1]
+            length = math.sqrt(dx*dx + dy*dy)
+            angle = math.degrees(math.atan2(dy, dx)) if length > 0.001 else 0
+        elif self.polygon_vertices:
+            last_v = self.polygon_vertices[-1]
+            dx = wx - last_v[0]
+            dy = wy - last_v[1]
+            length = math.sqrt(dx*dx + dy*dy)
+            angle = math.degrees(math.atan2(dy, dx)) if length > 0.001 else 0
+
+        # Emetti aggiornamento coordinate
+        self.coordinateUpdate.emit(wx, wy, length, angle, snap_type or "")
 
         if self.strumento in ['muro', 'rettangolo', 'polygon'] and (self.punto_inizio or self.polygon_vertices):
             self.punto_corrente = (wx, wy)
@@ -5456,7 +7594,13 @@ class DrawingCanvas(QWidget):
             altezza=self.progetto.altezza_piano
         )
 
-        self.progetto.muri.append(muro)
+        # Usa undo stack se disponibile
+        if self.undo_stack:
+            cmd = AddMuroCommand(self.progetto, muro, f"Aggiungi {muro.nome}")
+            self.undo_stack.push(cmd)
+        else:
+            self.progetto.muri.append(muro)
+
         self.muroAggiunto.emit(muro)
 
     def selectAt(self, wx: float, wy: float, multi: bool = False):
@@ -5523,7 +7667,7 @@ class DrawingCanvas(QWidget):
     # ========== STRUMENTO RETTANGOLO ==========
 
     def drawRettangolo(self, x1: float, y1: float, x2: float, y2: float):
-        """Disegna 4 muri che formano un rettangolo"""
+        """Disegna 4 muri che formano un rettangolo con supporto undo"""
         if not self.progetto:
             return
 
@@ -5539,9 +7683,17 @@ class DrawingCanvas(QWidget):
             Muro(f"M{n+4}", x1, y2, x1, y1, 0.30, h, z=z),  # sinistra
         ]
 
-        for m in muri_nuovi:
-            self.progetto.muri.append(m)
-            self.muroAggiunto.emit(m)
+        if self.undo_stack:
+            self.undo_stack.beginMacro("Disegna rettangolo")
+            for m in muri_nuovi:
+                cmd = AddMuroCommand(self.progetto, m, f"Aggiungi {m.nome}")
+                self.undo_stack.push(cmd)
+                self.muroAggiunto.emit(m)
+            self.undo_stack.endMacro()
+        else:
+            for m in muri_nuovi:
+                self.progetto.muri.append(m)
+                self.muroAggiunto.emit(m)
 
     # ========== STRUMENTO MISURA ==========
 
@@ -5843,10 +7995,24 @@ class DrawingCanvas(QWidget):
             self.update()
 
     def deleteSelected(self):
-        """Elimina muri selezionati"""
+        """Elimina muri selezionati con supporto undo"""
         if not self.progetto:
             return
-        self.progetto.muri = [m for m in self.progetto.muri if not m.selected]
+
+        selected = [m for m in self.progetto.muri if m.selected]
+        if not selected:
+            return
+
+        if self.undo_stack and len(selected) > 0:
+            # Crea macro per eliminazioni multiple
+            self.undo_stack.beginMacro(f"Elimina {len(selected)} muri")
+            for muro in selected:
+                cmd = DeleteMuroCommand(self.progetto, muro, f"Elimina {muro.nome}")
+                self.undo_stack.push(cmd)
+            self.undo_stack.endMacro()
+        else:
+            self.progetto.muri = [m for m in self.progetto.muri if not m.selected]
+
         self.muriChanged.emit()
         self.update()
 
@@ -6540,6 +8706,16 @@ class MuraturaEditorV2(QMainWindow):
         self.canvas.requestApertura.connect(self.onRequestApertura)
         canvas_layout.addWidget(self.canvas, 1)  # stretch=1
 
+        # Barra input coordinate (stile CAD)
+        self.coord_input_bar = CoordinateInputBar()
+        self.coord_input_bar.setCanvas(self.canvas)
+        self.coord_input_bar.coordinateEntered.connect(self.onCoordinateEntered)
+        self.coord_input_bar.relativeEntered.connect(self.onRelativeEntered)
+        self.coord_input_bar.polarEntered.connect(self.onPolarEntered)
+        self.coord_input_bar.commandEntered.connect(self.onCommandEntered)
+        self.canvas.coordinateUpdate.connect(self.onCanvasCoordinateUpdate)
+        canvas_layout.addWidget(self.coord_input_bar)
+
         # Barra di navigazione per canvas
         self.canvas_nav = QWidget()
         self.canvas_nav.setFixedHeight(50)
@@ -6621,11 +8797,59 @@ class MuraturaEditorV2(QMainWindow):
         self.undo_stack = QUndoStack(self)
         self.canvas.undo_stack = self.undo_stack
 
-        # Status bar
+        # Status bar professionale
         self.status_label = QLabel("Pronto")
+        self.status_label.setMinimumWidth(300)
         self.statusBar().addWidget(self.status_label)
 
+        # Separatore
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("color: #ccc;")
+        self.statusBar().addWidget(sep1)
+
+        # Indicatore strumento corrente
+        self.tool_indicator = QLabel("Strumento: Seleziona")
+        self.tool_indicator.setStyleSheet("""
+            font-weight: bold;
+            color: #0066cc;
+            padding: 2px 8px;
+            background: #e8f4fc;
+            border-radius: 3px;
+        """)
+        self.statusBar().addWidget(self.tool_indicator)
+
+        # Contatore elementi
+        self.element_counter = QLabel("Muri: 0 | Aperture: 0")
+        self.element_counter.setStyleSheet("color: #666; padding: 0 10px;")
+        self.statusBar().addPermanentWidget(self.element_counter)
+
+        # Indicatore snap
+        self.snap_status = QLabel("SNAP: ON")
+        self.snap_status.setStyleSheet("""
+            font-size: 10px;
+            font-weight: bold;
+            color: white;
+            background-color: #28a745;
+            padding: 2px 6px;
+            border-radius: 3px;
+        """)
+        self.statusBar().addPermanentWidget(self.snap_status)
+
+        # Indicatore griglia
+        self.grid_status = QLabel("GRID: ON")
+        self.grid_status.setStyleSheet("""
+            font-size: 10px;
+            font-weight: bold;
+            color: white;
+            background-color: #17a2b8;
+            padding: 2px 6px;
+            border-radius: 3px;
+        """)
+        self.statusBar().addPermanentWidget(self.grid_status)
+
         self.step_progress = QLabel("Step: -")
+        self.step_progress.setStyleSheet("font-weight: bold; color: #333; padding: 0 10px;")
         self.statusBar().addPermanentWidget(self.step_progress)
 
     def createRibbon(self):
@@ -6635,41 +8859,41 @@ class MuraturaEditorV2(QMainWindow):
         home_tab = RibbonTab()
 
         file_panel = RibbonPanel("File")
-        btn_nuovo = RibbonButton("Nuovo")
+        btn_nuovo = RibbonButton("Nuovo", icon_name="file-new", icon_category="actions")
         btn_nuovo.clicked.connect(self.nuovoProgetto)
         file_panel.addButton(btn_nuovo)
-        btn_apri = RibbonButton("Apri")
+        btn_apri = RibbonButton("Apri", icon_name="folder-open", icon_category="actions")
         btn_apri.clicked.connect(self.apriProgetto)
         file_panel.addButton(btn_apri)
-        btn_salva = RibbonButton("Salva")
+        btn_salva = RibbonButton("Salva", icon_name="save", icon_category="actions")
         btn_salva.clicked.connect(self.salvaProgetto)
         file_panel.addButton(btn_salva)
         home_tab.addPanel(file_panel)
 
         tools_panel = RibbonPanel("Strumenti")
-        self.btn_select = RibbonButton("Seleziona")
+        self.btn_select = RibbonButton("Seleziona", icon_name="cursor", icon_category="tools")
         self.btn_select.setCheckable(True)
         self.btn_select.setChecked(True)
-        self.btn_select.clicked.connect(lambda: self.canvas.setStrumento('select'))
+        self.btn_select.clicked.connect(lambda: self.setTool('select'))
         tools_panel.addButton(self.btn_select)
-        self.btn_muro = RibbonButton("Muro")
+        self.btn_muro = RibbonButton("Muro", icon_name="wall", icon_category="elements")
         self.btn_muro.setCheckable(True)
-        self.btn_muro.clicked.connect(lambda: self.canvas.setStrumento('muro'))
+        self.btn_muro.clicked.connect(lambda: self.setTool('muro'))
         tools_panel.addButton(self.btn_muro)
-        self.btn_rettangolo = RibbonButton("Rettangolo")
+        self.btn_rettangolo = RibbonButton("Rettangolo", icon_name="rectangle", icon_category="tools")
         self.btn_rettangolo.setCheckable(True)
         self.btn_rettangolo.setToolTip("Disegna 4 muri che formano un rettangolo")
-        self.btn_rettangolo.clicked.connect(lambda: self.canvas.setStrumento('rettangolo'))
+        self.btn_rettangolo.clicked.connect(lambda: self.setTool('rettangolo'))
         tools_panel.addButton(self.btn_rettangolo)
-        self.btn_apertura = RibbonButton("Apertura")
+        self.btn_apertura = RibbonButton("Apertura", icon_name="door", icon_category="elements")
         self.btn_apertura.setCheckable(True)
         self.btn_apertura.setToolTip("Clicca su un muro per inserire apertura")
-        self.btn_apertura.clicked.connect(lambda: self.canvas.setStrumento('apertura'))
+        self.btn_apertura.clicked.connect(lambda: self.setTool('apertura'))
         tools_panel.addButton(self.btn_apertura)
-        self.btn_polygon = RibbonButton("Poligono")
+        self.btn_polygon = RibbonButton("Poligono", icon_name="polygon", icon_category="tools")
         self.btn_polygon.setCheckable(True)
         self.btn_polygon.setToolTip("Disegna poligono di muri (doppio-click o Enter per chiudere)")
-        self.btn_polygon.clicked.connect(lambda: self.canvas.setStrumento('polygon'))
+        self.btn_polygon.clicked.connect(lambda: self.setTool('polygon'))
         tools_panel.addButton(self.btn_polygon)
         home_tab.addPanel(tools_panel)
 
@@ -6717,16 +8941,16 @@ class MuraturaEditorV2(QMainWindow):
 
         # Pannello strumenti avanzati
         adv_panel = RibbonPanel("Avanzati")
-        btn_misura = RibbonButton("Misura")
+        btn_misura = RibbonButton("Misura", icon_name="measure", icon_category="tools")
         btn_misura.setCheckable(True)
         btn_misura.setToolTip("Misura distanze nel disegno")
         btn_misura.clicked.connect(lambda: self.canvas.setStrumento('misura'))
         adv_panel.addButton(btn_misura)
-        btn_copia = RibbonButton("Copia")
+        btn_copia = RibbonButton("Copia", icon_name="copy", icon_category="actions")
         btn_copia.setToolTip("Copia muri selezionati (Ctrl+C)")
         btn_copia.clicked.connect(self.copiaMuri)
         adv_panel.addButton(btn_copia)
-        btn_incolla = RibbonButton("Incolla")
+        btn_incolla = RibbonButton("Incolla", icon_name="paste", icon_category="actions")
         btn_incolla.setToolTip("Incolla muri (Ctrl+V)")
         btn_incolla.clicked.connect(self.incollaMuri)
         adv_panel.addButton(btn_incolla)
@@ -6855,6 +9079,22 @@ class MuraturaEditorV2(QMainWindow):
 
         self.ribbon.addTab(vista_tab, "Vista")
 
+        # Tab HELP (?)
+        help_tab = RibbonTab()
+
+        info_panel = RibbonPanel("Informazioni")
+        btn_guida = RibbonButton("Guida", icon_name="help-circle", icon_category="misc")
+        btn_guida.setToolTip("Mostra guida rapida (F1)")
+        btn_guida.clicked.connect(self.mostraGuida)
+        info_panel.addButton(btn_guida)
+        btn_about = RibbonButton("Info", icon_name="info", icon_category="status")
+        btn_about.setToolTip("Informazioni su Muratura")
+        btn_about.clicked.connect(self.showAbout)
+        info_panel.addButton(btn_about)
+        help_tab.addPanel(info_panel)
+
+        self.ribbon.addTab(help_tab, "?")
+
         # Aggiungi ribbon al layout
         # Il ribbon è separato dalla barra menu
         ribbon_dock = QDockWidget()
@@ -6880,23 +9120,68 @@ class MuraturaEditorV2(QMainWindow):
 
     def apriProgetto(self):
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Apri Progetto", "", "File Muratura (*.mur)"
+            self, "Apri Progetto", "", "File Muratura (*.mur);;Tutti i file (*.*)"
         )
         if filepath:
-            # TODO: implementare caricamento
-            self.status_label.setText(f"Aperto: {filepath}")
+            progetto = ProjectSerializer.load(filepath)
+            if progetto:
+                self.progetto = progetto
+                self.canvas.setProgetto(self.progetto)
+                self.browser.updateFromProject(self.progetto)
+                self.vista_3d.setProgetto(self.progetto)
+
+                # Aggiorna pannelli step
+                self.step_progetto.progetto = self.progetto
+                self.step_piani.progetto = self.progetto
+                self.step_fondazioni.progetto = self.progetto
+                self.step_cordoli.progetto = self.progetto
+                self.step_solai.progetto = self.progetto
+                self.step_carichi.progetto = self.progetto
+
+                # Mostra workspace
+                self.central_stack.setCurrentWidget(self.workspace)
+                self.browser.show()
+                self.properties.show()
+
+                # Vai allo step salvato
+                self.goToStep(self.progetto.current_step)
+
+                self.setWindowTitle(f"MURATURA 2.0 - {self.progetto.nome}")
+                self.status_label.setText(f"Progetto caricato: {filepath}")
+            else:
+                QMessageBox.warning(self, "Errore",
+                    f"Impossibile caricare il progetto:\n{filepath}")
 
     def salvaProgetto(self):
         if not self.progetto.filepath:
-            filepath, _ = QFileDialog.getSaveFileName(
-                self, "Salva Progetto", "", "File Muratura (*.mur)"
-            )
-            if filepath:
-                self.progetto.filepath = filepath
+            self.salvaProgettoConNome()
+            return
 
-        if self.progetto.filepath:
-            # TODO: implementare salvataggio
+        if ProjectSerializer.save(self.progetto, self.progetto.filepath):
             self.status_label.setText(f"Salvato: {self.progetto.filepath}")
+            self.setWindowTitle(f"MURATURA 2.0 - {self.progetto.nome}")
+        else:
+            QMessageBox.warning(self, "Errore",
+                f"Impossibile salvare il progetto:\n{self.progetto.filepath}")
+
+    def salvaProgettoConNome(self):
+        """Salva con nome - permette di scegliere percorso"""
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Salva Progetto con Nome", "",
+            "File Muratura (*.mur);;Tutti i file (*.*)"
+        )
+        if filepath:
+            # Aggiungi estensione se mancante
+            if not filepath.lower().endswith('.mur'):
+                filepath += '.mur'
+
+            if ProjectSerializer.save(self.progetto, filepath):
+                self.progetto.filepath = filepath
+                self.status_label.setText(f"Salvato: {filepath}")
+                self.setWindowTitle(f"MURATURA 2.0 - {self.progetto.nome}")
+            else:
+                QMessageBox.warning(self, "Errore",
+                    f"Impossibile salvare il progetto:\n{filepath}")
 
     def caricaEsempio(self):
         """Carica un progetto di esempio"""
@@ -6975,6 +9260,11 @@ GUIDA RAPIDA - MURATURA v2.0
 5. EXPORT
    - Report HTML con tutti i risultati
         """)
+
+    def showAbout(self):
+        """Mostra dialogo informazioni"""
+        dialog = AboutDialog(self)
+        dialog.exec_()
 
     def goToStep(self, step: WorkflowStep):
         """Naviga a uno step del workflow"""
@@ -7429,6 +9719,208 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
     def onMuroAggiunto(self, muro: Muro):
         self.browser.updateFromProject(self.progetto)
         self.status_label.setText(f"Aggiunto: {muro.nome} ({muro.lunghezza:.2f}m)")
+        self.updateStatusBar()
+        # Ricostruisci spatial index per snap veloce
+        if self.progetto and self.progetto.muri:
+            self.canvas.geometry_engine.rebuild_index(self.progetto.muri)
+
+    def setTool(self, tool: str):
+        """Imposta lo strumento corrente e aggiorna la UI"""
+        self.canvas.setStrumento(tool)
+        self.updateStatusBar()
+
+        # Aggiorna bottoni radio
+        tool_buttons = {
+            'select': getattr(self, 'btn_select', None),
+            'muro': getattr(self, 'btn_muro', None),
+            'rettangolo': getattr(self, 'btn_rettangolo', None),
+            'apertura': getattr(self, 'btn_apertura', None),
+            'polygon': getattr(self, 'btn_polygon', None),
+        }
+        for t, btn in tool_buttons.items():
+            if btn:
+                btn.setChecked(t == tool)
+
+    def updateStatusBar(self):
+        """Aggiorna tutti gli elementi della status bar"""
+        # Contatore elementi
+        n_muri = len(self.progetto.muri) if self.progetto else 0
+        n_aperture = len(self.progetto.aperture) if self.progetto else 0
+        self.element_counter.setText(f"Muri: {n_muri} | Aperture: {n_aperture}")
+
+        # Strumento corrente
+        tool_names = {
+            'select': 'Seleziona',
+            'muro': 'Muro',
+            'rettangolo': 'Rettangolo',
+            'polygon': 'Poligono',
+            'apertura': 'Apertura',
+            'misura': 'Misura',
+            'pan': 'Pan'
+        }
+        tool = self.canvas.strumento if hasattr(self, 'canvas') else 'select'
+        self.tool_indicator.setText(f"Strumento: {tool_names.get(tool, tool)}")
+
+        # Snap status
+        if hasattr(self, 'canvas') and self.canvas.snap_enabled:
+            self.snap_status.setText("SNAP: ON")
+            self.snap_status.setStyleSheet("""
+                font-size: 10px; font-weight: bold; color: white;
+                background-color: #28a745; padding: 2px 6px; border-radius: 3px;
+            """)
+        else:
+            self.snap_status.setText("SNAP: OFF")
+            self.snap_status.setStyleSheet("""
+                font-size: 10px; font-weight: bold; color: white;
+                background-color: #6c757d; padding: 2px 6px; border-radius: 3px;
+            """)
+
+        # Grid status
+        if hasattr(self, 'canvas') and self.canvas.griglia:
+            self.grid_status.setText("GRID: ON")
+            self.grid_status.setStyleSheet("""
+                font-size: 10px; font-weight: bold; color: white;
+                background-color: #17a2b8; padding: 2px 6px; border-radius: 3px;
+            """)
+        else:
+            self.grid_status.setText("GRID: OFF")
+            self.grid_status.setStyleSheet("""
+                font-size: 10px; font-weight: bold; color: white;
+                background-color: #6c757d; padding: 2px 6px; border-radius: 3px;
+            """)
+
+    # ========== COORDINATE INPUT HANDLERS ==========
+
+    def onCanvasCoordinateUpdate(self, x: float, y: float, length: float, angle: float, snap_type: str):
+        """Riceve aggiornamenti coordinate dal canvas"""
+        self.coord_input_bar.updateCoordinates(x, y)
+        if length >= 0:
+            self.coord_input_bar.updateMeasurements(length, angle)
+        else:
+            self.coord_input_bar.updateMeasurements(None, None)
+        if snap_type:
+            self.coord_input_bar.updateSnapIndicator(snap_type)
+        else:
+            self.coord_input_bar.updateSnapIndicator(None)
+
+    def onCoordinateEntered(self, x: float, y: float):
+        """Gestisce input coordinate assolute"""
+        self._processCoordinate(x, y)
+        self.coord_input_bar.last_point = (x, y)
+
+    def onRelativeEntered(self, dx: float, dy: float):
+        """Gestisce input coordinate relative"""
+        if self.coord_input_bar.last_point:
+            x = self.coord_input_bar.last_point[0] + dx
+            y = self.coord_input_bar.last_point[1] + dy
+        elif self.canvas.punto_inizio:
+            x = self.canvas.punto_inizio[0] + dx
+            y = self.canvas.punto_inizio[1] + dy
+        else:
+            x, y = dx, dy
+        self._processCoordinate(x, y)
+        self.coord_input_bar.last_point = (x, y)
+
+    def onPolarEntered(self, length: float, angle: float):
+        """Gestisce input coordinate polari (lunghezza, angolo)"""
+        import math
+        rad = math.radians(angle)
+        if self.coord_input_bar.last_point:
+            x = self.coord_input_bar.last_point[0] + length * math.cos(rad)
+            y = self.coord_input_bar.last_point[1] + length * math.sin(rad)
+        elif self.canvas.punto_inizio:
+            x = self.canvas.punto_inizio[0] + length * math.cos(rad)
+            y = self.canvas.punto_inizio[1] + length * math.sin(rad)
+        else:
+            x = length * math.cos(rad)
+            y = length * math.sin(rad)
+        self._processCoordinate(x, y)
+        self.coord_input_bar.last_point = (x, y)
+
+    def onCommandEntered(self, command: str):
+        """Gestisce comandi testuali"""
+        command = command.upper()
+        if command == 'ESC' or command == 'ANNULLA':
+            self.canvas.punto_inizio = None
+            self.canvas.punto_corrente = None
+            self.canvas.polygon_vertices = []
+            self.canvas.update()
+            self.status_label.setText("Operazione annullata")
+        elif command == 'MURO' or command == 'M':
+            self.canvas.setStrumento('muro')
+            self.status_label.setText("Strumento: Muro")
+        elif command == 'RETTANGOLO' or command == 'R':
+            self.canvas.setStrumento('rettangolo')
+            self.status_label.setText("Strumento: Rettangolo")
+        elif command == 'SELEZIONA' or command == 'S':
+            self.canvas.setStrumento('select')
+            self.status_label.setText("Strumento: Seleziona")
+        elif command == 'POLIGONO' or command == 'P':
+            self.canvas.setStrumento('polygon')
+            self.status_label.setText("Strumento: Poligono")
+        elif command == 'MISURA':
+            self.canvas.setStrumento('misura')
+            self.status_label.setText("Strumento: Misura")
+        elif command == 'CHIUDI' or command == 'C':
+            if self.canvas.strumento == 'polygon' and len(self.canvas.polygon_vertices) >= 3:
+                self.canvas.closePolygon()
+                self.status_label.setText("Poligono chiuso")
+        elif command == 'GRIGLIA' or command == 'G':
+            self.canvas.griglia = not self.canvas.griglia
+            self.canvas.update()
+            stato = "attivata" if self.canvas.griglia else "disattivata"
+            self.status_label.setText(f"Griglia {stato}")
+            self.updateStatusBar()
+        elif command == 'SNAP':
+            self.canvas.snap_enabled = not self.canvas.snap_enabled
+            self.canvas.update()
+            stato = "attivato" if self.canvas.snap_enabled else "disattivato"
+            self.status_label.setText(f"Snap {stato}")
+            self.updateStatusBar()
+        elif command == 'QUOTE' or command == 'Q':
+            self.canvas.show_dimensions = not self.canvas.show_dimensions
+            self.canvas.update()
+            stato = "attivate" if self.canvas.show_dimensions else "disattivate"
+            self.status_label.setText(f"Quote {stato}")
+        elif command == 'ZOOM' or command == 'Z':
+            self.canvas.zoomFit()
+            self.status_label.setText("Zoom adattato")
+        elif command == 'ELIMINA' or command == 'DEL' or command == 'DELETE':
+            self.canvas.deleteSelected()
+        else:
+            self.status_label.setText(f"Comando sconosciuto: {command}")
+
+    def _processCoordinate(self, x: float, y: float):
+        """Processa una coordinata per lo strumento corrente"""
+        strumento = self.canvas.strumento
+
+        if strumento == 'muro':
+            if not self.canvas.punto_inizio:
+                self.canvas.punto_inizio = (x, y)
+                self.status_label.setText(f"Muro: punto iniziale ({x:.2f}, {y:.2f}) - inserisci punto finale")
+            else:
+                self.canvas.createMuro(x, y)
+                self.canvas.punto_inizio = None
+                self.canvas.punto_corrente = None
+                self.coord_input_bar.last_point = (x, y)
+
+        elif strumento == 'rettangolo':
+            if not self.canvas.punto_inizio:
+                self.canvas.punto_inizio = (x, y)
+                self.status_label.setText(f"Rettangolo: angolo 1 ({x:.2f}, {y:.2f}) - inserisci angolo opposto")
+            else:
+                self.canvas.drawRettangolo(
+                    self.canvas.punto_inizio[0], self.canvas.punto_inizio[1],
+                    x, y
+                )
+                self.canvas.punto_inizio = None
+                self.canvas.punto_corrente = None
+
+        elif strumento == 'polygon':
+            self.canvas.handlePolygonClick(x, y)
+            self.status_label.setText(f"Poligono: {len(self.canvas.polygon_vertices)} vertici - 'C' per chiudere")
+
+        self.canvas.update()
 
     def onSelectionChanged(self, obj):
         if isinstance(obj, Muro):
@@ -7605,7 +10097,11 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
         self.canvas.showRotateDialog()
 
     def esportaDXF(self):
-        """Esporta progetto in formato DXF"""
+        """
+        Esporta progetto in formato DXF professionale.
+        Usa ezdxf per generare file compatibili con AutoCAD/FreeCAD.
+        Include: layer separati, quote dimensionali, hatch per muri.
+        """
         if not DXF_AVAILABLE:
             QMessageBox.warning(self, "Errore",
                 "Libreria ezdxf non disponibile.\nInstalla con: pip install ezdxf")
@@ -7627,15 +10123,33 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
             doc = ezdxf.new('R2018')
             msp = doc.modelspace()
 
-            # Crea layer
-            doc.layers.add('MURI', color=5)  # Blu
-            doc.layers.add('APERTURE', color=1)  # Rosso
-            doc.layers.add('FONDAZIONI', color=8)  # Grigio
-            doc.layers.add('QUOTE', color=7)  # Nero
+            # === SETUP LAYER PROFESSIONALI ===
+            doc.layers.add('MURI', color=5, lineweight=35)  # Blu, spessore 0.35mm
+            doc.layers.add('MURI_HATCH', color=251)  # Grigio chiaro per hatch
+            doc.layers.add('APERTURE', color=1, lineweight=18)  # Rosso, 0.18mm
+            doc.layers.add('APERTURE_SIMBOLI', color=3)  # Verde per simboli
+            doc.layers.add('FONDAZIONI', color=8, lineweight=50)  # Grigio, 0.50mm
+            doc.layers.add('QUOTE', color=7)  # Nero per testi
+            doc.layers.add('DIMENSIONI', color=2)  # Giallo per quote dimensionali
+            doc.layers.add('ASSI', color=4, linetype='CENTER')  # Ciano per assi
 
-            # Esporta muri come polilinee
+            # === SETUP STILE QUOTE ===
+            doc.dimstyles.new('MURATURA',
+                dxfattribs={
+                    'dimtxt': 0.15,  # Altezza testo
+                    'dimasz': 0.1,  # Dimensione frecce
+                    'dimexe': 0.05,  # Estensione linee
+                    'dimexo': 0.05,  # Offset linee estensione
+                    'dimtad': 1,  # Testo sopra linea
+                })
+
+            # === ESPORTA MURI PER PIANO ===
+            piani_esportati = set()
             for muro in self.progetto.muri:
-                # Calcola i 4 punti del muro
+                piano = int(muro.z / self.progetto.altezza_piano) if self.progetto.altezza_piano > 0 else 0
+                piani_esportati.add(piano)
+
+                # Calcola i 4 punti del muro (rettangolo)
                 dx = muro.x2 - muro.x1
                 dy = muro.y2 - muro.y1
                 length = math.sqrt(dx*dx + dy*dy)
@@ -7648,45 +10162,155 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
                         (muro.x1 + nx, muro.y1 + ny),
                         (muro.x2 + nx, muro.y2 + ny),
                         (muro.x2 - nx, muro.y2 - ny),
-                        (muro.x1 - nx, muro.y1 - ny)  # Chiudi
                     ]
-                    msp.add_lwpolyline(points, dxfattribs={'layer': 'MURI'})
 
-                    # Aggiungi testo con nome muro
+                    # Polilinea chiusa per contorno muro
+                    poly = msp.add_lwpolyline(
+                        points + [points[0]],
+                        dxfattribs={'layer': 'MURI', 'const_width': 0}
+                    )
+                    poly.close()
+
+                    # Aggiungi hatch riempimento (pattern muratura)
+                    try:
+                        hatch = msp.add_hatch(color=251, dxfattribs={'layer': 'MURI_HATCH'})
+                        hatch.paths.add_polyline_path(points + [points[0]], is_closed=True)
+                        hatch.set_pattern_fill('ANSI31', scale=0.5)
+                    except Exception:
+                        pass  # Hatch opzionale
+
+                    # Testo nome muro al centro
                     cx = (muro.x1 + muro.x2) / 2
                     cy = (muro.y1 + muro.y2) / 2
-                    msp.add_text(muro.nome, dxfattribs={
-                        'layer': 'QUOTE',
-                        'height': 0.15
-                    }).set_placement((cx, cy))
+                    angle = math.degrees(math.atan2(dy, dx))
+                    msp.add_text(
+                        muro.nome,
+                        dxfattribs={
+                            'layer': 'QUOTE',
+                            'height': 0.12,
+                            'rotation': angle if -90 < angle < 90 else angle + 180
+                        }
+                    ).set_placement((cx, cy), align=ezdxf.enums.TextEntityAlignment.MIDDLE_CENTER)
 
-            # Esporta aperture come rettangoli
+                    # Quota dimensionale lunghezza
+                    try:
+                        dim = msp.add_aligned_dim(
+                            p1=(muro.x1, muro.y1),
+                            p2=(muro.x2, muro.y2),
+                            distance=0.3,
+                            dimstyle='MURATURA',
+                            override={'dimtxt': 0.1}
+                        )
+                        dim.dxf.layer = 'DIMENSIONI'
+                        dim.render()
+                    except Exception:
+                        pass  # Quote opzionali
+
+            # === ESPORTA APERTURE COME SIMBOLI ===
             for ap in self.progetto.aperture:
                 muro = next((m for m in self.progetto.muri if m.nome == ap.muro), None)
                 if muro:
-                    # Calcola posizione apertura
                     dx = muro.x2 - muro.x1
                     dy = muro.y2 - muro.y1
                     length = math.sqrt(dx*dx + dy*dy)
                     if length > 0:
-                        t = (ap.posizione + ap.larghezza/2) / length
+                        # Direzione lungo il muro
+                        ux = dx / length
+                        uy = dy / length
+                        # Normale al muro
+                        nx = -uy
+                        ny = ux
+
+                        # Posizione centro apertura
+                        t = ap.posizione / length
                         ax = muro.x1 + dx * t
                         ay = muro.y1 + dy * t
-                        msp.add_circle((ax, ay), radius=ap.larghezza/2,
-                                      dxfattribs={'layer': 'APERTURE'})
 
-            # Esporta fondazioni
+                        # Mezza larghezza apertura
+                        hw = ap.larghezza / 2
+                        hs = muro.spessore / 2 * 1.1  # Leggermente oltre lo spessore
+
+                        # Disegna simbolo apertura (linee di rottura)
+                        # Linea interruzione sinistra
+                        msp.add_line(
+                            (ax - ux * hw - nx * hs, ay - uy * hw - ny * hs),
+                            (ax - ux * hw + nx * hs, ay - uy * hw + ny * hs),
+                            dxfattribs={'layer': 'APERTURE'}
+                        )
+                        # Linea interruzione destra
+                        msp.add_line(
+                            (ax + ux * hw - nx * hs, ay + uy * hw - ny * hs),
+                            (ax + ux * hw + nx * hs, ay + uy * hw + ny * hs),
+                            dxfattribs={'layer': 'APERTURE'}
+                        )
+
+                        # Arco simbolo porta/finestra
+                        if ap.tipo == 'porta':
+                            # Simbolo porta (arco 90°)
+                            msp.add_arc(
+                                center=(ax - ux * hw, ay - uy * hw),
+                                radius=ap.larghezza,
+                                start_angle=math.degrees(math.atan2(uy, ux)),
+                                end_angle=math.degrees(math.atan2(uy, ux)) + 90,
+                                dxfattribs={'layer': 'APERTURE_SIMBOLI'}
+                            )
+                        else:
+                            # Simbolo finestra (X)
+                            msp.add_line(
+                                (ax - ux * hw * 0.7, ay - uy * hw * 0.7),
+                                (ax + ux * hw * 0.7, ay + uy * hw * 0.7),
+                                dxfattribs={'layer': 'APERTURE_SIMBOLI'}
+                            )
+
+                        # Label apertura
+                        msp.add_text(
+                            f"{ap.nome}\n{ap.larghezza:.2f}x{ap.altezza:.2f}",
+                            dxfattribs={'layer': 'QUOTE', 'height': 0.08}
+                        ).set_placement((ax, ay + 0.2))
+
+            # === ESPORTA FONDAZIONI ===
             for fond in self.progetto.fondazioni:
-                points = [
-                    (fond.x1, fond.y1),
-                    (fond.x2, fond.y2)
-                ]
-                msp.add_line(points[0], points[1], dxfattribs={'layer': 'FONDAZIONI'})
+                dx = fond.x2 - fond.x1
+                dy = fond.y2 - fond.y1
+                length = math.sqrt(dx*dx + dy*dy)
+                if length > 0:
+                    nx = -dy / length * fond.larghezza / 2
+                    ny = dx / length * fond.larghezza / 2
 
+                    points = [
+                        (fond.x1 - nx, fond.y1 - ny),
+                        (fond.x1 + nx, fond.y1 + ny),
+                        (fond.x2 + nx, fond.y2 + ny),
+                        (fond.x2 - nx, fond.y2 - ny),
+                    ]
+                    poly = msp.add_lwpolyline(
+                        points + [points[0]],
+                        dxfattribs={'layer': 'FONDAZIONI'}
+                    )
+                    poly.close()
+
+            # === ASSI COORDINATI ===
+            msp.add_line((-1, 0), (10, 0), dxfattribs={'layer': 'ASSI'})
+            msp.add_line((0, -1), (0, 10), dxfattribs={'layer': 'ASSI'})
+            msp.add_text('X', dxfattribs={'layer': 'ASSI', 'height': 0.2}).set_placement((10.2, 0))
+            msp.add_text('Y', dxfattribs={'layer': 'ASSI', 'height': 0.2}).set_placement((0, 10.2))
+
+            # Salva
             doc.saveas(filepath)
             self.status_label.setText(f"Esportato: {filepath}")
+
+            # Info esportazione
+            n_muri = len(self.progetto.muri)
+            n_aperture = len(self.progetto.aperture)
+            n_piani = len(piani_esportati)
             QMessageBox.information(self, "Esportazione DXF",
-                f"File esportato con successo:\n{filepath}")
+                f"File esportato con successo:\n{filepath}\n\n"
+                f"Contenuto:\n"
+                f"  - {n_muri} muri\n"
+                f"  - {n_aperture} aperture\n"
+                f"  - {len(self.progetto.fondazioni)} fondazioni\n"
+                f"  - {n_piani} piani\n\n"
+                f"Layer disponibili: MURI, APERTURE, FONDAZIONI, QUOTE, DIMENSIONI")
 
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Errore durante l'esportazione:\n{e}")
@@ -8423,8 +11047,39 @@ def main():
     # Stile globale
     app.setStyle('Fusion')
 
+    # Inizializza IconManager
+    IconManager.init()
+
+    # Mostra splash screen
+    splash = ProfessionalSplashScreen()
+    splash.show()
+    app.processEvents()
+
+    # Simulazione caricamento
+    splash.setProgress(10, "Caricamento moduli...")
+    app.processEvents()
+
+    splash.setProgress(30, "Inizializzazione risorse...")
+    app.processEvents()
+
+    splash.setProgress(50, "Configurazione interfaccia...")
+    app.processEvents()
+
+    # Crea finestra principale
+    splash.setProgress(70, "Creazione finestra principale...")
+    app.processEvents()
     editor = MuraturaEditorV2()
-    editor.show()
+
+    # Applica tema
+    splash.setProgress(90, "Applicazione tema...")
+    app.processEvents()
+    app.setStyleSheet(ThemeManager.get_stylesheet())
+
+    splash.setProgress(100, "Pronto!")
+    app.processEvents()
+
+    # Chiudi splash e mostra editor
+    splash.finish(editor)
 
     sys.exit(app.exec_())
 
