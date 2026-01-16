@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QLineEdit, QDoubleSpinBox, QSpinBox,
     QComboBox, QDialogButtonBox, QLabel, QGroupBox,
     QHeaderView, QPushButton, QFrame, QStackedWidget,
-    QWizard, QWizardPage, QCompleter, QListWidget, QTextEdit,
+    QWizard, QWizardPage, QCompleter, QListWidget, QListWidgetItem, QTextEdit,
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea,
     QTreeWidget, QTreeWidgetItem, QDockWidget, QToolButton,
     QSizePolicy, QProgressBar, QCheckBox, QMenu, QSlider,
@@ -165,6 +165,38 @@ try:
     FIBER_AVAILABLE = True
 except ImportError:
     FIBER_AVAILABLE = False
+
+# Import moduli rendering GPU (Blender/FreeCAD style)
+try:
+    from rendering import GLDrawingCanvas2D, GLRenderer
+    RENDERING_GL_AVAILABLE = True
+except ImportError:
+    RENDERING_GL_AVAILABLE = False
+
+# Vista3D - sempre disponibile (usa QPainter fallback)
+try:
+    from rendering.vista3d_gl import Vista3DWidgetGL
+    VISTA3D_AVAILABLE = True
+except ImportError:
+    VISTA3D_AVAILABLE = False
+
+# Import moduli BIM (ispirato FreeCAD)
+try:
+    from bim import (
+        BIMComponent, BIMWall, BIMSlab, BIMColumn, BIMBeam,
+        BIMFoundation, BIMRoof, BIMStairs, BIMWindow, BIMDoor,
+        export_to_ifc, import_from_ifc
+    )
+    BIM_AVAILABLE = True
+except ImportError:
+    BIM_AVAILABLE = False
+
+# Import ifcopenshell per IFC
+try:
+    import ifcopenshell
+    IFC_AVAILABLE = True
+except ImportError:
+    IFC_AVAILABLE = False
 
 
 # ============================================================================
@@ -651,9 +683,22 @@ class IconManager:
             theme = ThemeManager.current_theme()
 
         if cls._resources_path:
+            # Prima cerca nel tema corrente
             path = cls._resources_path / 'icons' / theme / category / f'{name}.svg'
             if path.exists():
                 return str(path)
+
+            # Per categoria 'bim', cerca nella cartella speciale
+            if category == 'bim':
+                bim_path = cls._resources_path / 'icons' / 'bim' / f'{name}.svg'
+                if bim_path.exists():
+                    return str(bim_path)
+
+            # Fallback: cerca direttamente in icons/categoria
+            fallback_path = cls._resources_path / 'icons' / category / f'{name}.svg'
+            if fallback_path.exists():
+                return str(fallback_path)
+
         return ""
 
     @classmethod
@@ -8644,6 +8689,9 @@ class MuraturaEditorV2(QMainWindow):
         self._remote_action = None
         self._remote_params = None
 
+        # Carica stylesheet professionale (stile FreeCAD)
+        self._loadStylesheet()
+
         self.initUI()
 
         # Connetti segnale comandi remoti
@@ -8768,11 +8816,19 @@ class MuraturaEditorV2(QMainWindow):
         self.step_carichi.btn_avanti.clicked.connect(lambda: self.goToStep(WorkflowStep.MATERIALI))
         self.content_stack.addWidget(self.step_carichi)
 
-        # Vista 3D
-        self.vista_3d = Vista3DWidget()
+        # Vista 3D (versione con rendering professionale)
+        if VISTA3D_AVAILABLE:
+            self.vista_3d = Vista3DWidgetGL()
+            print("[INFO] Vista3D inizializzata (stile FreeCAD/Blender)")
+        else:
+            self.vista_3d = Vista3DWidget()
+            print("[INFO] Vista3D fallback inizializzata")
         self.content_stack.addWidget(self.vista_3d)
 
         self.central_stack.addWidget(self.workspace)
+
+        # Menu Bar professionale (stile FreeCAD)
+        self.createMenuBar()
 
         # Ribbon toolbar
         self.createRibbon()
@@ -8851,6 +8907,535 @@ class MuraturaEditorV2(QMainWindow):
         self.step_progress = QLabel("Step: -")
         self.step_progress.setStyleSheet("font-weight: bold; color: #333; padding: 0 10px;")
         self.statusBar().addPermanentWidget(self.step_progress)
+
+    def _loadStylesheet(self):
+        """Carica stylesheet professionale stile FreeCAD"""
+        import os
+        stylesheet_path = os.path.join(
+            os.path.dirname(__file__),
+            'resources', 'styles', 'muratura.qss'
+        )
+        if os.path.exists(stylesheet_path):
+            try:
+                with open(stylesheet_path, 'r', encoding='utf-8') as f:
+                    stylesheet = f.read()
+                self.setStyleSheet(stylesheet)
+                print(f"[INFO] Caricato stylesheet: {stylesheet_path}")
+            except Exception as e:
+                print(f"[WARN] Errore caricamento stylesheet: {e}")
+        else:
+            print(f"[INFO] Stylesheet non trovato: {stylesheet_path}")
+
+    def showNotImplemented(self, feature_name: str, description: str = "", alternatives: list = None):
+        """Mostra dialogo per funzioni non ancora integrate nel backend.
+
+        Args:
+            feature_name: Nome della funzionalità
+            description: Descrizione aggiuntiva (opzionale)
+            alternatives: Lista di alternative disponibili (opzionale)
+        """
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("Funzione Backend da Integrare")
+
+        text = f"<b>{feature_name}</b><br><br>"
+        if description:
+            text += f"{description}<br><br>"
+        text += "Questa funzionalità è in fase di sviluppo.<br>"
+        text += "L'interfaccia è pronta, il backend sarà integrato nelle prossime versioni."
+
+        if alternatives:
+            text += "<br><br><b>Alternative disponibili:</b><ul>"
+            for alt in alternatives:
+                text += f"<li>{alt}</li>"
+            text += "</ul>"
+
+        msg.setText(text)
+        msg.exec_()
+
+    def createMenuBar(self):
+        """Crea la menu bar professionale stile FreeCAD"""
+        menubar = self.menuBar()
+
+        # ═══════════════════════════════════════════════════════════════
+        # MENU FILE
+        # ═══════════════════════════════════════════════════════════════
+        file_menu = menubar.addMenu("&File")
+
+        # Nuovo Progetto
+        action_nuovo = QAction("Nuovo Progetto", self)
+        action_nuovo.setShortcut("Ctrl+N")
+        action_nuovo.triggered.connect(self.nuovoProgetto)
+        file_menu.addAction(action_nuovo)
+
+        # Apri
+        action_apri = QAction("Apri...", self)
+        action_apri.setShortcut("Ctrl+O")
+        action_apri.triggered.connect(self.apriProgetto)
+        file_menu.addAction(action_apri)
+
+        # Salva
+        action_salva = QAction("Salva", self)
+        action_salva.setShortcut("Ctrl+S")
+        action_salva.triggered.connect(self.salvaProgetto)
+        file_menu.addAction(action_salva)
+
+        # Salva con nome
+        action_salva_nome = QAction("Salva con nome...", self)
+        action_salva_nome.setShortcut("Ctrl+Shift+S")
+        action_salva_nome.triggered.connect(self.salvaConNome)
+        file_menu.addAction(action_salva_nome)
+
+        file_menu.addSeparator()
+
+        # Sottomenu Importa
+        import_menu = file_menu.addMenu("Importa")
+
+        action_import_mur = QAction("File Muratura (.mur)", self)
+        action_import_mur.triggered.connect(self.apriProgetto)
+        import_menu.addAction(action_import_mur)
+
+        action_import_img = QAction("Immagine riferimento", self)
+        action_import_img.triggered.connect(self.importaImmagine)
+        import_menu.addAction(action_import_img)
+
+        action_import_ifc = QAction("IFC (BIM)", self)
+        action_import_ifc.triggered.connect(lambda: self.showNotImplemented(
+            "Importazione IFC",
+            "Import file IFC per interoperabilità BIM",
+            ["Usare formato DXF come alternativa", "Disegnare manualmente la geometria"]
+        ))
+        import_menu.addAction(action_import_ifc)
+
+        # Sottomenu Esporta
+        export_menu = file_menu.addMenu("Esporta")
+
+        action_export_dxf = QAction("DXF (AutoCAD)", self)
+        action_export_dxf.triggered.connect(self.esportaDXF)
+        export_menu.addAction(action_export_dxf)
+
+        action_export_ifc = QAction("IFC (BIM)", self)
+        action_export_ifc.triggered.connect(self.esportaIFC)
+        export_menu.addAction(action_export_ifc)
+
+        action_export_pdf = QAction("PDF Report", self)
+        action_export_pdf.triggered.connect(self.esportaPDF)
+        export_menu.addAction(action_export_pdf)
+
+        action_export_html = QAction("HTML Report", self)
+        action_export_html.triggered.connect(self.esportaHTML)
+        export_menu.addAction(action_export_html)
+
+        file_menu.addSeparator()
+
+        # Progetti recenti (placeholder)
+        recent_menu = file_menu.addMenu("Progetti recenti")
+        action_no_recent = QAction("(nessun progetto recente)", self)
+        action_no_recent.setEnabled(False)
+        recent_menu.addAction(action_no_recent)
+
+        file_menu.addSeparator()
+
+        # Esci
+        action_esci = QAction("Esci", self)
+        action_esci.setShortcut("Alt+F4")
+        action_esci.triggered.connect(self.close)
+        file_menu.addAction(action_esci)
+
+        # ═══════════════════════════════════════════════════════════════
+        # MENU MODIFICA
+        # ═══════════════════════════════════════════════════════════════
+        edit_menu = menubar.addMenu("&Modifica")
+
+        action_undo = QAction("Annulla", self)
+        action_undo.setShortcut("Ctrl+Z")
+        action_undo.triggered.connect(self.undo)
+        edit_menu.addAction(action_undo)
+
+        action_redo = QAction("Ripeti", self)
+        action_redo.setShortcut("Ctrl+Y")
+        action_redo.triggered.connect(self.redo)
+        edit_menu.addAction(action_redo)
+
+        edit_menu.addSeparator()
+
+        action_copy = QAction("Copia", self)
+        action_copy.setShortcut("Ctrl+C")
+        action_copy.triggered.connect(self.copySelection)
+        edit_menu.addAction(action_copy)
+
+        action_paste = QAction("Incolla", self)
+        action_paste.setShortcut("Ctrl+V")
+        action_paste.triggered.connect(self.pasteSelection)
+        edit_menu.addAction(action_paste)
+
+        action_delete = QAction("Elimina", self)
+        action_delete.setShortcut("Del")
+        action_delete.triggered.connect(self.deleteSelection)
+        edit_menu.addAction(action_delete)
+
+        edit_menu.addSeparator()
+
+        action_select_all = QAction("Seleziona tutto", self)
+        action_select_all.setShortcut("Ctrl+A")
+        action_select_all.triggered.connect(self.selectAll)
+        edit_menu.addAction(action_select_all)
+
+        action_deselect = QAction("Deseleziona", self)
+        action_deselect.setShortcut("Esc")
+        action_deselect.triggered.connect(self.deselectAll)
+        edit_menu.addAction(action_deselect)
+
+        edit_menu.addSeparator()
+
+        # Sottomenu Trasformazioni
+        transform_menu = edit_menu.addMenu("Trasformazioni")
+
+        action_rotate = QAction("Ruota...", self)
+        action_rotate.triggered.connect(self.ruotaSelezione)
+        transform_menu.addAction(action_rotate)
+
+        action_mirror_x = QAction("Specchia X", self)
+        action_mirror_x.triggered.connect(self.specchiaX)
+        transform_menu.addAction(action_mirror_x)
+
+        action_mirror_y = QAction("Specchia Y", self)
+        action_mirror_y.triggered.connect(self.specchiaY)
+        transform_menu.addAction(action_mirror_y)
+
+        action_offset = QAction("Offset...", self)
+        action_offset.triggered.connect(self.offsetSelezione)
+        transform_menu.addAction(action_offset)
+
+        action_copy_piano = QAction("Copia Piano...", self)
+        action_copy_piano.triggered.connect(self.copiaPiano)
+        edit_menu.addAction(action_copy_piano)
+
+        # ═══════════════════════════════════════════════════════════════
+        # MENU VISTA
+        # ═══════════════════════════════════════════════════════════════
+        view_menu = menubar.addMenu("&Vista")
+
+        # Sottomenu Pannelli
+        panels_menu = view_menu.addMenu("Pannelli")
+
+        self.action_browser = QAction("Browser Progetto", self)
+        self.action_browser.setCheckable(True)
+        self.action_browser.setChecked(False)
+        self.action_browser.triggered.connect(self.toggleBrowser)
+        panels_menu.addAction(self.action_browser)
+
+        self.action_properties = QAction("Proprietà", self)
+        self.action_properties.setCheckable(True)
+        self.action_properties.setChecked(False)
+        self.action_properties.triggered.connect(self.toggleProperties)
+        panels_menu.addAction(self.action_properties)
+
+        self.action_layers = QAction("Layer", self)
+        self.action_layers.setCheckable(True)
+        self.action_layers.setChecked(False)
+        self.action_layers.triggered.connect(self.toggleLayers)
+        panels_menu.addAction(self.action_layers)
+
+        view_menu.addSeparator()
+
+        # Sottomenu Zoom
+        zoom_menu = view_menu.addMenu("Zoom")
+
+        action_zoom_fit = QAction("Adatta (Home)", self)
+        action_zoom_fit.setShortcut("Home")
+        action_zoom_fit.triggered.connect(self.zoomFit)
+        zoom_menu.addAction(action_zoom_fit)
+
+        action_zoom_in = QAction("Zoom +", self)
+        action_zoom_in.setShortcut("Ctrl++")
+        action_zoom_in.triggered.connect(self.zoomIn)
+        zoom_menu.addAction(action_zoom_in)
+
+        action_zoom_out = QAction("Zoom -", self)
+        action_zoom_out.setShortcut("Ctrl+-")
+        action_zoom_out.triggered.connect(self.zoomOut)
+        zoom_menu.addAction(action_zoom_out)
+
+        view_menu.addSeparator()
+
+        self.action_grid = QAction("Griglia", self)
+        self.action_grid.setCheckable(True)
+        self.action_grid.setChecked(True)
+        self.action_grid.setShortcut("G")
+        self.action_grid.triggered.connect(self.toggleGriglia)
+        view_menu.addAction(self.action_grid)
+
+        self.action_quote = QAction("Quote automatiche", self)
+        self.action_quote.setCheckable(True)
+        self.action_quote.setChecked(False)
+        self.action_quote.triggered.connect(self.toggleQuote)
+        view_menu.addAction(self.action_quote)
+
+        view_menu.addSeparator()
+
+        action_3d = QAction("Vista 3D", self)
+        action_3d.triggered.connect(self.mostra3D)
+        view_menu.addAction(action_3d)
+
+        view_menu.addSeparator()
+
+        # Sottomenu Tema
+        theme_menu = view_menu.addMenu("Tema")
+
+        self.action_theme_light = QAction("Chiaro", self)
+        self.action_theme_light.setCheckable(True)
+        self.action_theme_light.setChecked(True)
+        self.action_theme_light.triggered.connect(lambda: self.setTheme('light'))
+        theme_menu.addAction(self.action_theme_light)
+
+        self.action_theme_dark = QAction("Scuro", self)
+        self.action_theme_dark.setCheckable(True)
+        self.action_theme_dark.triggered.connect(lambda: self.setTheme('dark'))
+        theme_menu.addAction(self.action_theme_dark)
+
+        # Gruppo esclusivo per tema
+        theme_group = QActionGroup(self)
+        theme_group.addAction(self.action_theme_light)
+        theme_group.addAction(self.action_theme_dark)
+
+        # ═══════════════════════════════════════════════════════════════
+        # MENU BIM
+        # ═══════════════════════════════════════════════════════════════
+        bim_menu = menubar.addMenu("&BIM")
+
+        # Sottomenu Strutture Verticali
+        vertical_menu = bim_menu.addMenu("Strutture Verticali")
+
+        action_muro = QAction("Muro", self)
+        action_muro.triggered.connect(lambda: self.setTool('muro'))
+        vertical_menu.addAction(action_muro)
+
+        action_pilastro = QAction("Pilastro", self)
+        action_pilastro.triggered.connect(self.inserisciPilastro)
+        vertical_menu.addAction(action_pilastro)
+
+        action_rettangolo = QAction("Rettangolo (4 muri)", self)
+        action_rettangolo.triggered.connect(lambda: self.setTool('rettangolo'))
+        vertical_menu.addAction(action_rettangolo)
+
+        # Sottomenu Strutture Orizzontali
+        horizontal_menu = bim_menu.addMenu("Strutture Orizzontali")
+
+        action_trave = QAction("Trave", self)
+        action_trave.triggered.connect(self.inserisciTrave)
+        horizontal_menu.addAction(action_trave)
+
+        action_solaio = QAction("Solaio", self)
+        action_solaio.triggered.connect(self.inserisciSolaio)
+        horizontal_menu.addAction(action_solaio)
+
+        action_tetto = QAction("Tetto", self)
+        action_tetto.triggered.connect(self.inserisciTetto)
+        horizontal_menu.addAction(action_tetto)
+
+        # Sottomenu Aperture
+        aperture_menu = bim_menu.addMenu("Aperture")
+
+        action_finestra = QAction("Finestra", self)
+        action_finestra.triggered.connect(self.inserisciFinestra)
+        aperture_menu.addAction(action_finestra)
+
+        action_porta = QAction("Porta", self)
+        action_porta.triggered.connect(self.inserisciPorta)
+        aperture_menu.addAction(action_porta)
+
+        # Sottomenu Fondazioni
+        fond_menu = bim_menu.addMenu("Fondazioni")
+
+        action_fondazione = QAction("Fondazione continua", self)
+        action_fondazione.triggered.connect(self.inserisciFondazione)
+        fond_menu.addAction(action_fondazione)
+
+        action_genera_fond = QAction("Genera automaticamente", self)
+        action_genera_fond.triggered.connect(self.generaFondazioni)
+        fond_menu.addAction(action_genera_fond)
+
+        bim_menu.addSeparator()
+
+        # Sottomenu Cordoli e Tiranti
+        cordoli_menu = bim_menu.addMenu("Cordoli e Tiranti")
+
+        action_cordolo = QAction("Cordolo", self)
+        action_cordolo.triggered.connect(self.inserisciCordolo)
+        cordoli_menu.addAction(action_cordolo)
+
+        action_tirante = QAction("Tirante", self)
+        action_tirante.triggered.connect(self.inserisciTirante)
+        cordoli_menu.addAction(action_tirante)
+
+        action_scale = QAction("Scale", self)
+        action_scale.triggered.connect(self.inserisciScale)
+        bim_menu.addAction(action_scale)
+
+        bim_menu.addSeparator()
+
+        action_materiale = QAction("Assegna Materiale...", self)
+        action_materiale.triggered.connect(self.assegnaMateriale)
+        bim_menu.addAction(action_materiale)
+
+        action_armatura = QAction("Definisci Armatura...", self)
+        action_armatura.triggered.connect(lambda: self.showNotImplemented(
+            "Definizione Armatura",
+            "Editor grafico per la definizione dell'armatura degli elementi strutturali"
+        ))
+        bim_menu.addAction(action_armatura)
+
+        action_struttura = QAction("Tipo Struttura...", self)
+        action_struttura.triggered.connect(self.impostaTipoStruttura)
+        bim_menu.addAction(action_struttura)
+
+        # ═══════════════════════════════════════════════════════════════
+        # MENU STRUMENTI
+        # ═══════════════════════════════════════════════════════════════
+        tools_menu = menubar.addMenu("&Strumenti")
+
+        action_select = QAction("Seleziona", self)
+        action_select.setShortcut("S")
+        action_select.triggered.connect(lambda: self.setTool('select'))
+        tools_menu.addAction(action_select)
+
+        action_pan = QAction("Pan", self)
+        action_pan.setShortcut("P")
+        action_pan.triggered.connect(lambda: self.setTool('pan'))
+        tools_menu.addAction(action_pan)
+
+        action_misura = QAction("Misura", self)
+        action_misura.setShortcut("M")
+        action_misura.triggered.connect(lambda: self.canvas.setStrumento('misura'))
+        tools_menu.addAction(action_misura)
+
+        tools_menu.addSeparator()
+
+        action_polygon = QAction("Poligono di muri", self)
+        action_polygon.triggered.connect(lambda: self.setTool('polygon'))
+        tools_menu.addAction(action_polygon)
+
+        tools_menu.addSeparator()
+
+        # Sottomenu OSNAP
+        osnap_menu = tools_menu.addMenu("OSNAP")
+
+        self.action_osnap_endpoint = QAction("Endpoint", self)
+        self.action_osnap_endpoint.setCheckable(True)
+        self.action_osnap_endpoint.setChecked(True)
+        self.action_osnap_endpoint.triggered.connect(self.toggleOsnapEndpoint)
+        osnap_menu.addAction(self.action_osnap_endpoint)
+
+        self.action_osnap_midpoint = QAction("Midpoint", self)
+        self.action_osnap_midpoint.setCheckable(True)
+        self.action_osnap_midpoint.setChecked(True)
+        self.action_osnap_midpoint.triggered.connect(self.toggleOsnapMidpoint)
+        osnap_menu.addAction(self.action_osnap_midpoint)
+
+        self.action_osnap_intersection = QAction("Intersection", self)
+        self.action_osnap_intersection.setCheckable(True)
+        self.action_osnap_intersection.setChecked(True)
+        self.action_osnap_intersection.triggered.connect(self.toggleOsnapIntersection)
+        osnap_menu.addAction(self.action_osnap_intersection)
+
+        self.action_osnap_grid = QAction("Grid", self)
+        self.action_osnap_grid.setCheckable(True)
+        self.action_osnap_grid.setChecked(True)
+        self.action_osnap_grid.triggered.connect(self.toggleOsnapGrid)
+        osnap_menu.addAction(self.action_osnap_grid)
+
+        action_grid_step = QAction("Passo Griglia...", self)
+        action_grid_step.triggered.connect(self.impostaPassoGriglia)
+        tools_menu.addAction(action_grid_step)
+
+        # ═══════════════════════════════════════════════════════════════
+        # MENU ANALISI
+        # ═══════════════════════════════════════════════════════════════
+        analysis_menu = menubar.addMenu("&Analisi")
+
+        action_verifica = QAction("Verifica Rapida", self)
+        action_verifica.triggered.connect(self.verificaRapida)
+        analysis_menu.addAction(action_verifica)
+
+        action_analisi = QAction("Analisi Avanzata...", self)
+        action_analisi.triggered.connect(self.analisiAvanzata)
+        analysis_menu.addAction(action_analisi)
+
+        analysis_menu.addSeparator()
+
+        # Sottomenu Metodi di Calcolo
+        methods_menu = analysis_menu.addMenu("Metodi di Calcolo")
+
+        # Recupera metodi disponibili
+        try:
+            from analisi import get_available_methods
+            available_methods = get_available_methods()
+            for method_id, method_name in available_methods.items():
+                action_method = QAction(method_name, self)
+                action_method.triggered.connect(lambda checked, m=method_id: self.setAnalysisMethod(m))
+                methods_menu.addAction(action_method)
+        except:
+            action_no_methods = QAction("(nessun metodo disponibile)", self)
+            action_no_methods.setEnabled(False)
+            methods_menu.addAction(action_no_methods)
+
+        analysis_menu.addSeparator()
+
+        action_valida = QAction("Valida Geometria", self)
+        action_valida.triggered.connect(self.validaGeometria)
+        analysis_menu.addAction(action_valida)
+
+        action_spettro = QAction("Spettro Sismico NTC 2018", self)
+        action_spettro.triggered.connect(self.mostraSpettro)
+        analysis_menu.addAction(action_spettro)
+
+        analysis_menu.addSeparator()
+
+        self.action_dcr = QAction("Mostra DCR su muri", self)
+        self.action_dcr.setCheckable(True)
+        self.action_dcr.triggered.connect(self.toggleDCR)
+        analysis_menu.addAction(self.action_dcr)
+
+        action_report = QAction("Genera Report...", self)
+        action_report.triggered.connect(self.generaReport)
+        analysis_menu.addAction(action_report)
+
+        # ═══════════════════════════════════════════════════════════════
+        # MENU ? (HELP)
+        # ═══════════════════════════════════════════════════════════════
+        help_menu = menubar.addMenu("&?")
+
+        action_guida = QAction("Guida Rapida", self)
+        action_guida.setShortcut("F1")
+        action_guida.triggered.connect(self.mostraGuida)
+        help_menu.addAction(action_guida)
+
+        action_tutorial = QAction("Tutorial", self)
+        action_tutorial.triggered.connect(lambda: self.showNotImplemented(
+            "Tutorial Interattivo",
+            "Tutorial passo-passo per imparare ad usare Muratura"
+        ))
+        help_menu.addAction(action_tutorial)
+
+        action_esempi = QAction("Esempi", self)
+        action_esempi.triggered.connect(self.caricaEsempio)
+        help_menu.addAction(action_esempi)
+
+        help_menu.addSeparator()
+
+        action_ntc = QAction("NTC 2018 - Riferimenti", self)
+        action_ntc.triggered.connect(lambda: self.showNotImplemented(
+            "Riferimenti Normativi NTC 2018",
+            "Collegamento alla documentazione della normativa NTC 2018"
+        ))
+        help_menu.addAction(action_ntc)
+
+        help_menu.addSeparator()
+
+        action_about = QAction("Informazioni su Muratura", self)
+        action_about.triggered.connect(self.mostraInfo)
+        help_menu.addAction(action_about)
 
     def createRibbon(self):
         self.ribbon = RibbonToolbar()
@@ -8974,6 +9559,10 @@ class MuraturaEditorV2(QMainWindow):
         btn_dxf.setToolTip("Esporta in formato DXF (AutoCAD)")
         btn_dxf.clicked.connect(self.esportaDXF)
         export_panel.addButton(btn_dxf)
+        btn_ifc = RibbonButton("IFC", icon_name="building", icon_category="bim")
+        btn_ifc.setToolTip("Esporta in formato IFC (BIM)\nCompatibile con FreeCAD, Revit, ArchiCAD")
+        btn_ifc.clicked.connect(self.esportaIFC)
+        export_panel.addButton(btn_ifc)
         btn_pdf = RibbonButton("PDF")
         btn_pdf.setToolTip("Esporta report in PDF")
         btn_pdf.clicked.connect(self.esportaPDF)
@@ -9078,6 +9667,100 @@ class MuraturaEditorV2(QMainWindow):
         vista_tab.addPanel(zoom_panel)
 
         self.ribbon.addTab(vista_tab, "Vista")
+
+        # Tab BIM - Elementi Strutturali (stile FreeCAD)
+        bim_tab = RibbonTab()
+
+        # Pannello Strutture Verticali
+        verticali_panel = RibbonPanel("Verticali")
+        self.btn_bim_muro = RibbonButton("Muro", icon_name="wall", icon_category="bim")
+        self.btn_bim_muro.setCheckable(True)
+        self.btn_bim_muro.setToolTip("Disegna muro strutturale\nClicca due punti per definire l'asse")
+        self.btn_bim_muro.clicked.connect(lambda: self.setTool('muro'))
+        verticali_panel.addButton(self.btn_bim_muro)
+
+        self.btn_bim_pilastro = RibbonButton("Pilastro", icon_name="column", icon_category="bim")
+        self.btn_bim_pilastro.setCheckable(True)
+        self.btn_bim_pilastro.setToolTip("Inserisci pilastro\nClicca per posizionare")
+        self.btn_bim_pilastro.clicked.connect(lambda: self.setTool('pilastro'))
+        verticali_panel.addButton(self.btn_bim_pilastro)
+
+        bim_tab.addPanel(verticali_panel)
+
+        # Pannello Strutture Orizzontali
+        orizzontali_panel = RibbonPanel("Orizzontali")
+        self.btn_bim_trave = RibbonButton("Trave", icon_name="beam", icon_category="bim")
+        self.btn_bim_trave.setCheckable(True)
+        self.btn_bim_trave.setToolTip("Disegna trave\nClicca due punti per definire l'asse")
+        self.btn_bim_trave.clicked.connect(lambda: self.setTool('trave'))
+        orizzontali_panel.addButton(self.btn_bim_trave)
+
+        self.btn_bim_solaio = RibbonButton("Solaio", icon_name="slab", icon_category="bim")
+        self.btn_bim_solaio.setCheckable(True)
+        self.btn_bim_solaio.setToolTip("Definisci solaio\nSeleziona area o disegna contorno")
+        self.btn_bim_solaio.clicked.connect(lambda: self.setTool('solaio'))
+        orizzontali_panel.addButton(self.btn_bim_solaio)
+
+        self.btn_bim_tetto = RibbonButton("Tetto", icon_name="roof", icon_category="bim")
+        self.btn_bim_tetto.setCheckable(True)
+        self.btn_bim_tetto.setToolTip("Definisci copertura")
+        self.btn_bim_tetto.clicked.connect(lambda: self.setTool('tetto'))
+        orizzontali_panel.addButton(self.btn_bim_tetto)
+
+        bim_tab.addPanel(orizzontali_panel)
+
+        # Pannello Aperture
+        aperture_panel = RibbonPanel("Aperture")
+        self.btn_bim_porta = RibbonButton("Porta", icon_name="door", icon_category="bim")
+        self.btn_bim_porta.setCheckable(True)
+        self.btn_bim_porta.setToolTip("Inserisci porta\nClicca su un muro")
+        self.btn_bim_porta.clicked.connect(lambda: self.setTool('porta'))
+        aperture_panel.addButton(self.btn_bim_porta)
+
+        self.btn_bim_finestra = RibbonButton("Finestra", icon_name="window", icon_category="bim")
+        self.btn_bim_finestra.setCheckable(True)
+        self.btn_bim_finestra.setToolTip("Inserisci finestra\nClicca su un muro")
+        self.btn_bim_finestra.clicked.connect(lambda: self.setTool('finestra'))
+        aperture_panel.addButton(self.btn_bim_finestra)
+
+        bim_tab.addPanel(aperture_panel)
+
+        # Pannello Fondazioni
+        fondazioni_panel = RibbonPanel("Fondazioni")
+        self.btn_bim_fondazione = RibbonButton("Fondazione", icon_name="foundation", icon_category="bim")
+        self.btn_bim_fondazione.setCheckable(True)
+        self.btn_bim_fondazione.setToolTip("Disegna fondazione continua")
+        self.btn_bim_fondazione.clicked.connect(lambda: self.setTool('fondazione'))
+        fondazioni_panel.addButton(self.btn_bim_fondazione)
+
+        self.btn_bim_scala = RibbonButton("Scala", icon_name="stairs", icon_category="bim")
+        self.btn_bim_scala.setCheckable(True)
+        self.btn_bim_scala.setToolTip("Inserisci scala\nDefinisci partenza e arrivo")
+        self.btn_bim_scala.clicked.connect(lambda: self.setTool('scala'))
+        fondazioni_panel.addButton(self.btn_bim_scala)
+
+        self.btn_bim_armatura = RibbonButton("Armatura", icon_name="rebar", icon_category="bim")
+        self.btn_bim_armatura.setToolTip("Definisci armatura elementi")
+        self.btn_bim_armatura.clicked.connect(self.defineArmatura)
+        fondazioni_panel.addButton(self.btn_bim_armatura)
+
+        bim_tab.addPanel(fondazioni_panel)
+
+        # Pannello Materiali
+        materiali_panel = RibbonPanel("Materiali")
+        btn_materiale = RibbonButton("Materiale", icon_name="material", icon_category="bim")
+        btn_materiale.setToolTip("Assegna materiale agli elementi selezionati")
+        btn_materiale.clicked.connect(self.assegnaMateriale)
+        materiali_panel.addButton(btn_materiale)
+
+        btn_struttura = RibbonButton("Struttura", icon_name="structure", icon_category="bim")
+        btn_struttura.setToolTip("Definisci tipo struttura muraria")
+        btn_struttura.clicked.connect(self.definisciStruttura)
+        materiali_panel.addButton(btn_struttura)
+
+        bim_tab.addPanel(materiali_panel)
+
+        self.ribbon.addTab(bim_tab, "BIM")
 
         # Tab HELP (?)
         help_tab = RibbonTab()
@@ -9266,8 +9949,84 @@ GUIDA RAPIDA - MURATURA v2.0
         dialog = AboutDialog(self)
         dialog.exec_()
 
+    # ========================================================================
+    # METODI BIM
+    # ========================================================================
+
+    def defineArmatura(self):
+        """Definisce armatura per elementi selezionati"""
+        if not self.canvas.selezione:
+            QMessageBox.warning(self, "Attenzione",
+                "Seleziona prima un elemento per definire l'armatura")
+            return
+        QMessageBox.information(self, "Armatura",
+            "Funzionalità armatura in sviluppo.\n"
+            "Sarà possibile definire:\n"
+            "- Ferri longitudinali\n"
+            "- Staffe\n"
+            "- Copriferro")
+
+    def assegnaMateriale(self):
+        """Assegna materiale agli elementi selezionati"""
+        if not self.canvas.selezione:
+            QMessageBox.warning(self, "Attenzione",
+                "Seleziona prima uno o più elementi")
+            return
+
+        materiali = [
+            "Muratura - Mattoni pieni",
+            "Muratura - Blocchi",
+            "Muratura - Pietra",
+            "Calcestruzzo C25/30",
+            "Calcestruzzo C30/37",
+            "Acciaio S275",
+            "Acciaio S355",
+            "Legno C24",
+        ]
+        materiale, ok = QInputDialog.getItem(
+            self, "Assegna Materiale",
+            "Seleziona materiale:",
+            materiali, 0, False
+        )
+        if ok and materiale:
+            for nome in self.canvas.selezione:
+                for muro in self.progetto.muri:
+                    if muro.nome == nome:
+                        muro.materiale = materiale
+            self.status_label.setText(f"Assegnato materiale: {materiale}")
+            self.canvas.update()
+
+    def definisciStruttura(self):
+        """Definisce tipo di struttura muraria"""
+        tipi = [
+            "Muratura ordinaria (NTC 2018 Tab. 7.8.II)",
+            "Muratura armata (NTC 2018 Tab. 7.8.III)",
+            "Muratura confinata",
+            "Muratura rinforzata con FRP",
+            "Muratura storica - Pietrame irregolare",
+            "Muratura storica - Mattoni pieni",
+        ]
+        tipo, ok = QInputDialog.getItem(
+            self, "Tipo Struttura",
+            "Seleziona tipologia strutturale:",
+            tipi, 0, False
+        )
+        if ok and tipo:
+            self.progetto.tipo_struttura = tipo
+            self.status_label.setText(f"Struttura: {tipo}")
+
     def goToStep(self, step: WorkflowStep):
         """Naviga a uno step del workflow"""
+        try:
+            self._goToStepImpl(step)
+        except Exception as e:
+            import traceback
+            print(f"ERRORE in goToStep({step}): {e}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "Errore", f"Errore navigazione step:\n{e}")
+
+    def _goToStepImpl(self, step: WorkflowStep):
+        """Implementazione interna di goToStep"""
         # Salva dati step corrente
         if self.progetto.current_step == WorkflowStep.PROGETTO:
             self.step_progetto.saveData()
@@ -9322,6 +10081,93 @@ GUIDA RAPIDA - MURATURA v2.0
         self.browser.updateFromProject(self.progetto)
 
         self.step_progress.setText(f"Step: {STEP_NAMES[step]}")
+
+        # Aggiorna visibilità pulsanti contestuali
+        self.updateButtonVisibility(step)
+
+    def updateButtonVisibility(self, step: WorkflowStep):
+        """Aggiorna la visibilità dei pulsanti in base allo step corrente."""
+        try:
+            self._updateButtonVisibilityImpl(step)
+        except Exception as e:
+            print(f"ERRORE in updateButtonVisibility({step}): {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _updateButtonVisibilityImpl(self, step: WorkflowStep):
+        """Implementazione interna - gestisce la contestualità dell'interfaccia:
+        - Seleziona il tab appropriato nel ribbon
+        - Abilita/disabilita strumenti pertinenti
+        - Aggiorna il tool indicator nella status bar
+        """
+        # Mappatura step -> tab index nel ribbon
+        # 0=Home, 1=Analisi, 2=Vista, 3=BIM, 4=?
+        STEP_TO_TAB = {
+            WorkflowStep.PROGETTO: 0,      # Home - File operations
+            WorkflowStep.PIANI: 0,         # Home - Piano navigation
+            WorkflowStep.GEOMETRIA: 3,     # BIM - Drawing tools
+            WorkflowStep.APERTURE: 3,      # BIM - Aperture tools
+            WorkflowStep.FONDAZIONI: 3,    # BIM - Fondazioni
+            WorkflowStep.CORDOLI: 3,       # BIM - Cordoli
+            WorkflowStep.SOLAI: 3,         # BIM - Solai
+            WorkflowStep.CARICHI: 0,       # Home
+            WorkflowStep.MATERIALI: 3,     # BIM - Materiali
+            WorkflowStep.ANALISI: 1,       # Analisi
+            WorkflowStep.RISULTATI: 1,     # Analisi - Risultati
+        }
+
+        # Messaggi contestuali per lo strumento corrente
+        STEP_TOOL_HINTS = {
+            WorkflowStep.PROGETTO: "Definisci i dati del progetto",
+            WorkflowStep.PIANI: "Configura i piani dell'edificio",
+            WorkflowStep.GEOMETRIA: "Strumenti: Muro, Rettangolo, Poligono",
+            WorkflowStep.APERTURE: "Clicca sui muri per aggiungere porte/finestre",
+            WorkflowStep.FONDAZIONI: "Definisci le fondazioni continue",
+            WorkflowStep.CORDOLI: "Aggiungi cordoli e tiranti",
+            WorkflowStep.SOLAI: "Configura solai e coperture",
+            WorkflowStep.CARICHI: "Definisci i carichi di progetto",
+            WorkflowStep.MATERIALI: "Assegna materiali agli elementi",
+            WorkflowStep.ANALISI: "Esegui verifica e analisi strutturale",
+            WorkflowStep.RISULTATI: "Visualizza risultati e genera report",
+        }
+
+        # Seleziona il tab appropriato
+        if hasattr(self, 'ribbon') and step in STEP_TO_TAB:
+            try:
+                self.ribbon.setCurrentIndex(STEP_TO_TAB[step])
+            except:
+                pass  # Ignora errori se tab non esiste
+
+        # Aggiorna tool indicator
+        if step in STEP_TOOL_HINTS:
+            self.tool_indicator.setText(STEP_TOOL_HINTS[step])
+
+        # Abilita/disabilita strumenti di disegno in base allo step
+        drawing_enabled = step in [WorkflowStep.GEOMETRIA, WorkflowStep.APERTURE]
+
+        # Strumenti di disegno
+        for btn in [self.btn_select, self.btn_muro, self.btn_rettangolo,
+                    self.btn_apertura, self.btn_polygon]:
+            if hasattr(self, btn.objectName() if hasattr(btn, 'objectName') else ''):
+                pass  # I pulsanti esistono come attributi self.btn_xxx
+
+        # Abilita strumenti muro solo in GEOMETRIA
+        if hasattr(self, 'btn_muro'):
+            self.btn_muro.setEnabled(step == WorkflowStep.GEOMETRIA)
+        if hasattr(self, 'btn_rettangolo'):
+            self.btn_rettangolo.setEnabled(step == WorkflowStep.GEOMETRIA)
+        if hasattr(self, 'btn_polygon'):
+            self.btn_polygon.setEnabled(step == WorkflowStep.GEOMETRIA)
+
+        # Abilita strumento apertura solo in APERTURE
+        if hasattr(self, 'btn_apertura'):
+            self.btn_apertura.setEnabled(step == WorkflowStep.APERTURE)
+
+        # BIM tools - abilita in base al contesto
+        if hasattr(self, 'btn_bim_muro'):
+            self.btn_bim_muro.setEnabled(step == WorkflowStep.GEOMETRIA)
+        if hasattr(self, 'btn_bim_pilastro'):
+            self.btn_bim_pilastro.setEnabled(step == WorkflowStep.GEOMETRIA)
 
     def onRequestApertura(self, nome_muro: str, posizione: float):
         """Chiamato quando l'utente clicca su un muro con lo strumento apertura"""
@@ -9729,7 +10575,7 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
         self.canvas.setStrumento(tool)
         self.updateStatusBar()
 
-        # Aggiorna bottoni radio
+        # Aggiorna bottoni radio (Home tab)
         tool_buttons = {
             'select': getattr(self, 'btn_select', None),
             'muro': getattr(self, 'btn_muro', None),
@@ -9737,6 +10583,20 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
             'apertura': getattr(self, 'btn_apertura', None),
             'polygon': getattr(self, 'btn_polygon', None),
         }
+        # Aggiorna anche bottoni BIM tab
+        bim_buttons = {
+            'muro': getattr(self, 'btn_bim_muro', None),
+            'pilastro': getattr(self, 'btn_bim_pilastro', None),
+            'trave': getattr(self, 'btn_bim_trave', None),
+            'solaio': getattr(self, 'btn_bim_solaio', None),
+            'tetto': getattr(self, 'btn_bim_tetto', None),
+            'porta': getattr(self, 'btn_bim_porta', None),
+            'finestra': getattr(self, 'btn_bim_finestra', None),
+            'fondazione': getattr(self, 'btn_bim_fondazione', None),
+            'scala': getattr(self, 'btn_bim_scala', None),
+        }
+        tool_buttons.update(bim_buttons)
+
         for t, btn in tool_buttons.items():
             if btn:
                 btn.setChecked(t == tool)
@@ -9756,7 +10616,15 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
             'polygon': 'Poligono',
             'apertura': 'Apertura',
             'misura': 'Misura',
-            'pan': 'Pan'
+            'pan': 'Pan',
+            'pilastro': 'Pilastro',
+            'trave': 'Trave',
+            'solaio': 'Solaio',
+            'tetto': 'Tetto',
+            'porta': 'Porta',
+            'finestra': 'Finestra',
+            'fondazione': 'Fondazione',
+            'scala': 'Scala',
         }
         tool = self.canvas.strumento if hasattr(self, 'canvas') else 'select'
         self.tool_indicator.setText(f"Strumento: {tool_names.get(tool, tool)}")
@@ -10314,6 +11182,116 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
 
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Errore durante l'esportazione:\n{e}")
+
+    def esportaIFC(self):
+        """
+        Esporta progetto in formato IFC (Industry Foundation Classes).
+        Usa ifcopenshell per generare file compatibili con software BIM.
+        """
+        if not BIM_AVAILABLE:
+            QMessageBox.warning(self, "Errore",
+                "Modulo BIM non disponibile.\n"
+                "Verificare che la cartella 'bim' sia presente.")
+            return
+
+        if not IFC_AVAILABLE:
+            QMessageBox.warning(self, "Errore",
+                "Libreria ifcopenshell non disponibile.\n"
+                "Installa con: pip install ifcopenshell")
+            return
+
+        if not self.progetto.muri:
+            QMessageBox.warning(self, "Attenzione", "Nessun elemento da esportare")
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Esporta IFC", f"{self.progetto.nome}.ifc",
+            "IFC Files (*.ifc)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            # Converti elementi Muratura in componenti BIM
+            bim_components = []
+
+            # Converti muri
+            for muro in self.progetto.muri:
+                bim_wall = BIMWall(
+                    start=(muro.x1, muro.y1),
+                    end=(muro.x2, muro.y2),
+                    height=muro.altezza * 1000,  # Converti in mm
+                    thickness=muro.spessore * 1000,
+                    name=muro.nome
+                )
+                bim_wall.base_height = muro.z * 1000
+                bim_components.append(bim_wall)
+
+            # Converti fondazioni
+            for fond in self.progetto.fondazioni:
+                outline = [
+                    (fond.x1 * 1000 - fond.larghezza * 500, fond.y1 * 1000 - fond.larghezza * 500),
+                    (fond.x2 * 1000 + fond.larghezza * 500, fond.y1 * 1000 - fond.larghezza * 500),
+                    (fond.x2 * 1000 + fond.larghezza * 500, fond.y2 * 1000 + fond.larghezza * 500),
+                    (fond.x1 * 1000 - fond.larghezza * 500, fond.y2 * 1000 + fond.larghezza * 500),
+                ]
+                bim_found = BIMFoundation(
+                    outline=outline,
+                    depth=fond.profondita * 1000,
+                    elevation=-fond.profondita * 1000,
+                    name=fond.nome
+                )
+                bim_components.append(bim_found)
+
+            # Converti solai
+            for solaio in self.progetto.solai:
+                # Calcola outline dai muri del piano
+                piano_muri = [m for m in self.progetto.muri if abs(m.z - solaio.quota) < 0.1]
+                if piano_muri:
+                    xs = [m.x1 for m in piano_muri] + [m.x2 for m in piano_muri]
+                    ys = [m.y1 for m in piano_muri] + [m.y2 for m in piano_muri]
+                    outline = [
+                        (min(xs) * 1000, min(ys) * 1000),
+                        (max(xs) * 1000, min(ys) * 1000),
+                        (max(xs) * 1000, max(ys) * 1000),
+                        (min(xs) * 1000, max(ys) * 1000),
+                    ]
+                    bim_slab = BIMSlab(
+                        outline=outline,
+                        thickness=solaio.spessore * 1000 if hasattr(solaio, 'spessore') else 200,
+                        elevation=solaio.quota * 1000,
+                        name=f"Solaio_Piano_{solaio.piano}"
+                    )
+                    bim_components.append(bim_slab)
+
+            # Esporta
+            export_to_ifc(
+                bim_components,
+                filepath,
+                project_name=self.progetto.nome,
+                author="Muratura CAD"
+            )
+
+            # Messaggio successo
+            n_muri = len([c for c in bim_components if isinstance(c, BIMWall)])
+            n_fond = len([c for c in bim_components if isinstance(c, BIMFoundation)])
+            n_solai = len([c for c in bim_components if isinstance(c, BIMSlab)])
+
+            QMessageBox.information(self, "Esportazione IFC",
+                f"File IFC esportato con successo:\n{filepath}\n\n"
+                f"Contenuto:\n"
+                f"  - {n_muri} IfcWall\n"
+                f"  - {n_fond} IfcFooting\n"
+                f"  - {n_solai} IfcSlab\n\n"
+                f"Il file può essere aperto con:\n"
+                f"  - FreeCAD (BIM Workbench)\n"
+                f"  - Revit, ArchiCAD, Tekla\n"
+                f"  - BIMvision, Solibri")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Errore",
+                f"Errore durante l'esportazione IFC:\n{e}")
 
     def esportaPDF(self):
         """Esporta report in PDF"""
@@ -10913,6 +11891,296 @@ Indice di Rischio: {self.progetto.indice_rischio:.3f}
         QApplication.processEvents()
 
         QTimer.singleShot(500, lambda: self.canvas.setStyleSheet(original_style))
+
+    # =========================================================================
+    # METODI STUB PER MENU BAR - Da integrare con backend
+    # =========================================================================
+
+    def undo(self):
+        """Annulla l'ultima operazione"""
+        if hasattr(self, 'undo_stack') and self.undo_stack:
+            self.undo_stack.undo()
+            self.setStatus("Annullato")
+
+    def redo(self):
+        """Ripete l'operazione annullata"""
+        if hasattr(self, 'undo_stack') and self.undo_stack:
+            self.undo_stack.redo()
+            self.setStatus("Ripetuto")
+
+    def selectAll(self):
+        """Seleziona tutti gli elementi"""
+        if hasattr(self, 'canvas') and hasattr(self.canvas, 'selectAll'):
+            self.canvas.selectAll()
+            self.setStatus("Selezionati tutti gli elementi")
+
+    def deselectAll(self):
+        """Deseleziona tutti gli elementi"""
+        if hasattr(self, 'canvas') and hasattr(self.canvas, 'deselectAll'):
+            self.canvas.deselectAll()
+            self.setStatus("Selezione annullata")
+
+    def salvaConNome(self):
+        """Salva il progetto con un nuovo nome"""
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Salva Progetto con Nome",
+            "", "File Muratura (*.mur);;Tutti i file (*)"
+        )
+        if filepath:
+            if not filepath.endswith('.mur'):
+                filepath += '.mur'
+            self.progetto.filepath = filepath
+            self.salvaProgetto()
+
+    def setTheme(self, theme_name: str):
+        """Imposta il tema dell'interfaccia"""
+        if theme_name == 'dark':
+            self.action_theme_dark.setChecked(True)
+            self.action_theme_light.setChecked(False)
+            # Applica tema scuro
+            ThemeManager.current_theme = 'dark'
+        else:
+            self.action_theme_light.setChecked(True)
+            self.action_theme_dark.setChecked(False)
+            # Applica tema chiaro
+            ThemeManager.current_theme = 'light'
+
+        # Aggiorna stylesheet
+        QApplication.instance().setStyleSheet(ThemeManager.get_stylesheet())
+        self.setStatus(f"Tema cambiato: {theme_name}")
+
+    def toggleOsnapEndpoint(self, checked: bool):
+        """Abilita/disabilita snap a endpoint"""
+        if hasattr(self.canvas, 'osnap_settings'):
+            self.canvas.osnap_settings['endpoint'] = checked
+        self.setStatus(f"OSNAP Endpoint: {'ON' if checked else 'OFF'}")
+
+    def toggleOsnapMidpoint(self, checked: bool):
+        """Abilita/disabilita snap a midpoint"""
+        if hasattr(self.canvas, 'osnap_settings'):
+            self.canvas.osnap_settings['midpoint'] = checked
+        self.setStatus(f"OSNAP Midpoint: {'ON' if checked else 'OFF'}")
+
+    def toggleOsnapIntersection(self, checked: bool):
+        """Abilita/disabilita snap a intersezione"""
+        if hasattr(self.canvas, 'osnap_settings'):
+            self.canvas.osnap_settings['intersection'] = checked
+        self.setStatus(f"OSNAP Intersection: {'ON' if checked else 'OFF'}")
+
+    def toggleOsnapGrid(self, checked: bool):
+        """Abilita/disabilita snap a griglia"""
+        if hasattr(self.canvas, 'snap_to_grid'):
+            self.canvas.snap_to_grid = checked
+        self.setStatus(f"OSNAP Grid: {'ON' if checked else 'OFF'}")
+
+    def impostaPassoGriglia(self):
+        """Imposta il passo della griglia"""
+        current_step = getattr(self.canvas, 'grid_step', 100)
+        step, ok = QInputDialog.getDouble(
+            self, "Passo Griglia",
+            "Inserisci il passo della griglia (cm):",
+            current_step, 1, 1000, 1
+        )
+        if ok:
+            self.canvas.grid_step = step
+            self.canvas.update()
+            self.setStatus(f"Passo griglia: {step} cm")
+
+    def setAnalysisMethod(self, method_id: str):
+        """Imposta il metodo di analisi"""
+        self.progetto.analysis_method = method_id
+        self.setStatus(f"Metodo di analisi: {method_id}")
+
+    def toggleDCR(self, checked: bool):
+        """Mostra/nasconde DCR sui muri"""
+        if hasattr(self.canvas, 'show_dcr'):
+            self.canvas.show_dcr = checked
+            self.canvas.update()
+        self.setStatus(f"Visualizzazione DCR: {'ON' if checked else 'OFF'}")
+
+    def generaReport(self):
+        """Genera report completo del progetto"""
+        if not self.progetto.piani:
+            QMessageBox.warning(self, "Attenzione", "Nessun progetto caricato.")
+            return
+
+        filepath, filter_used = QFileDialog.getSaveFileName(
+            self, "Genera Report",
+            f"{self.progetto.nome or 'report'}_report",
+            "PDF (*.pdf);;HTML (*.html)"
+        )
+        if filepath:
+            if 'pdf' in filter_used.lower():
+                self.esportaPDF()
+            else:
+                self.esportaHTML(filepath)
+
+    def copySelection(self):
+        """Copia gli elementi selezionati"""
+        if hasattr(self.canvas, 'copySelection'):
+            self.canvas.copySelection()
+        else:
+            self.showNotImplemented("Copia Elementi",
+                "Funzione di copia elementi in sviluppo")
+
+    def pasteSelection(self):
+        """Incolla gli elementi copiati"""
+        if hasattr(self.canvas, 'pasteSelection'):
+            self.canvas.pasteSelection()
+        else:
+            self.showNotImplemented("Incolla Elementi",
+                "Funzione di incolla elementi in sviluppo")
+
+    def deleteSelection(self):
+        """Elimina gli elementi selezionati"""
+        if hasattr(self.canvas, 'deleteSelected'):
+            self.canvas.deleteSelected()
+        elif hasattr(self.canvas, 'eliminaSelezionati'):
+            self.canvas.eliminaSelezionati()
+        else:
+            self.setStatus("Nessun elemento selezionato")
+
+    def ruotaSelezione(self):
+        """Ruota gli elementi selezionati"""
+        angle, ok = QInputDialog.getDouble(
+            self, "Ruota Selezione",
+            "Angolo di rotazione (gradi):",
+            90.0, -360.0, 360.0, 1
+        )
+        if ok and hasattr(self.canvas, 'rotateSelection'):
+            self.canvas.rotateSelection(angle)
+        elif ok:
+            self.showNotImplemented("Rotazione Elementi",
+                "Funzione di rotazione elementi in sviluppo")
+
+    def specchiaX(self):
+        """Specchia la selezione rispetto all'asse X"""
+        if hasattr(self.canvas, 'mirrorSelectionX'):
+            self.canvas.mirrorSelectionX()
+        else:
+            self.showNotImplemented("Specchia X",
+                "Funzione di specchiatura rispetto all'asse X")
+
+    def specchiaY(self):
+        """Specchia la selezione rispetto all'asse Y"""
+        if hasattr(self.canvas, 'mirrorSelectionY'):
+            self.canvas.mirrorSelectionY()
+        else:
+            self.showNotImplemented("Specchia Y",
+                "Funzione di specchiatura rispetto all'asse Y")
+
+    def offsetSelezione(self):
+        """Crea offset della selezione"""
+        distance, ok = QInputDialog.getDouble(
+            self, "Offset Selezione",
+            "Distanza di offset (cm):",
+            50.0, 1.0, 1000.0, 1
+        )
+        if ok and hasattr(self.canvas, 'offsetSelection'):
+            self.canvas.offsetSelection(distance)
+        elif ok:
+            self.showNotImplemented("Offset Elementi",
+                "Funzione di offset elementi in sviluppo")
+
+    def inserisciPilastro(self):
+        """Inserisce un pilastro"""
+        self.goToStep(WorkflowStep.GEOMETRIA)
+        self.showNotImplemented("Inserimento Pilastro",
+            "Strumento per inserimento pilastri strutturali",
+            ["Usare lo strumento Muro per disegnare pilastri come sezioni rettangolari"])
+
+    def inserisciTrave(self):
+        """Inserisce una trave"""
+        self.goToStep(WorkflowStep.SOLAI)
+        self.showNotImplemented("Inserimento Trave",
+            "Strumento per inserimento travi",
+            ["Definire travi nel pannello Solai"])
+
+    def inserisciSolaio(self):
+        """Inserisce un solaio"""
+        self.goToStep(WorkflowStep.SOLAI)
+        self.setStatus("Vai al pannello Solai per definire i solai")
+
+    def inserisciTetto(self):
+        """Inserisce un tetto"""
+        self.goToStep(WorkflowStep.SOLAI)
+        self.showNotImplemented("Inserimento Tetto",
+            "Strumento per inserimento coperture e tetti",
+            ["Definire il tetto come solaio di copertura nel pannello Solai"])
+
+    def inserisciFinestra(self):
+        """Inserisce una finestra"""
+        self.goToStep(WorkflowStep.APERTURE)
+        self.setTool('apertura')
+        self.setStatus("Clicca su un muro per inserire una finestra")
+
+    def inserisciPorta(self):
+        """Inserisce una porta"""
+        self.goToStep(WorkflowStep.APERTURE)
+        self.setTool('apertura')
+        self.setStatus("Clicca su un muro per inserire una porta")
+
+    def inserisciFondazione(self):
+        """Inserisce una fondazione"""
+        self.goToStep(WorkflowStep.FONDAZIONI)
+        self.setStatus("Vai al pannello Fondazioni per definire le fondazioni")
+
+    def generaFondazioni(self):
+        """Genera automaticamente le fondazioni sotto i muri"""
+        self.goToStep(WorkflowStep.FONDAZIONI)
+        if hasattr(self.step_fondazioni, 'generaAutomaticamente'):
+            self.step_fondazioni.generaAutomaticamente()
+        else:
+            self.setStatus("Usa il pannello Fondazioni per generare le fondazioni automaticamente")
+
+    def inserisciCordolo(self):
+        """Inserisce un cordolo"""
+        self.goToStep(WorkflowStep.CORDOLI)
+        self.setStatus("Vai al pannello Cordoli per definire i cordoli")
+
+    def inserisciTirante(self):
+        """Inserisce un tirante"""
+        self.goToStep(WorkflowStep.CORDOLI)
+        self.setStatus("Vai al pannello Cordoli per definire i tiranti")
+
+    def inserisciScale(self):
+        """Inserisce scale"""
+        self.showNotImplemented("Inserimento Scale",
+            "Strumento per inserimento vani scala e scale strutturali")
+
+    def impostaTipoStruttura(self):
+        """Imposta il tipo di struttura"""
+        types = ["Muratura portante", "Muratura armata", "Muratura confinata", "Mista"]
+        tipo, ok = QInputDialog.getItem(
+            self, "Tipo Struttura",
+            "Seleziona il tipo di struttura:",
+            types, 0, False
+        )
+        if ok:
+            self.progetto.tipo_struttura = tipo
+            self.setStatus(f"Tipo struttura: {tipo}")
+
+    def mostra3D(self):
+        """Mostra la vista 3D del progetto"""
+        # Aggiorna il modello 3D
+        if hasattr(self.vista_3d, 'setProgetto'):
+            self.vista_3d.setProgetto(self.progetto)
+        if hasattr(self.vista_3d, 'update'):
+            self.vista_3d.update()
+
+        # Mostra la vista 3D
+        self.content_stack.setCurrentWidget(self.vista_3d)
+        self.setStatus("Vista 3D attiva")
+
+    def analisiAvanzata(self):
+        """Apre il dialogo di analisi avanzata"""
+        self.goToStep(WorkflowStep.ANALISI)
+        self.setStatus("Pannello Analisi attivo - configura i parametri")
+
+    def mostraInfo(self):
+        """Mostra le informazioni sul programma"""
+        dialog = AboutDialog(self)
+        dialog.exec_()
 
     def closeEvent(self, event):
         """Ferma il controller remoto alla chiusura"""
